@@ -1,0 +1,57 @@
+---
+# https://taskfile.dev
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  tool:
+    taskfile: tool.task.yml
+    internal: true
+
+tasks:
+  default:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - task: policy
+    - task: advisories
+
+  # Deterministic supply-chain policy (bans + licenses + sources). Depends only on
+  # the committed tree, so it is cached on its inputs and gates every PR and
+  # push to main.
+  policy:
+    desc: '{{.TASK}}'
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: tool:aqua:tag:cargo-deny
+    - task: tool:aqua:tag:rustup
+    - task: tool:cargo:fetch
+    sources:
+    - 'Cargo.toml'
+    - 'Cargo.lock'
+    - 'deny.toml'
+    # Fingerprint the task's own definition and the pinned toolchain so editing
+    # this task's commands or bumping rust-toolchain.toml re-runs it locally
+    # instead of being skipped on a stale .task/.done_* marker.
+    - 'tasks/audit.task.yml'
+    - 'rust-toolchain.toml'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - cargo deny check bans licenses sources
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true
+
+  # RustSec advisory scan. Time-dependent (the advisory DB changes without any
+  # local change), so it is never cached -- always re-run. Runs in the required
+  # `audit` gate on every PR and push to main (see .github/workflows/wc-audit.yml).
+  advisories:
+    desc: '{{.TASK}}'
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: tool:aqua:tag:cargo-deny
+    - task: tool:aqua:tag:rustup
+    - task: tool:cargo:fetch
+    cmds:
+    - cargo deny check advisories

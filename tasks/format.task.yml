@@ -1,0 +1,120 @@
+---
+# https://taskfile.dev
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  tool:
+    taskfile: tool.task.yml
+    internal: true
+
+tasks:
+  default:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - task: shfmt
+    - task: yamlfmt
+    - task: taplo
+    - task: pinact
+    - task: rustfmt
+
+  shfmt:
+    desc: '{{.TASK}}'
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: tool:aqua:tag:shfmt
+    sources:
+    - '**/*.sh'
+    - '**/*.bash'
+    - '.*/**/*.sh'
+    - '.*/**/*.bash'
+    - exclude: '.git/**/*'
+    - exclude: '.task/**/*'
+    - exclude: 'target/**/*'
+    - exclude: 'dist/**/*'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - shfmt -w .
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true
+
+  yamlfmt:
+    desc: '{{.TASK}}'
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: tool:aqua:tag:yamlfmt
+    sources:
+    - '.*.yml'
+    - '.*.yaml'
+    - '**/*.yml'
+    - '**/*.yaml'
+    - '.*/**/*.yml'
+    - '.*/**/*.yaml'
+    - exclude: '.git/**/*'
+    - exclude: '.task/**/*'
+    - exclude: 'target/**/*'
+    - exclude: 'dist/**/*'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - yamlfmt .
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true
+
+  taplo:
+    desc: '{{.TASK}}'
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: tool:aqua:tag:taplo
+    sources:
+    - '.*.toml'
+    - '**/*.toml'
+    - '.*/**/*.toml'
+    - exclude: '.git/**/*'
+    - exclude: '.task/**/*'
+    - exclude: 'target/**/*'
+    - exclude: 'dist/**/*'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - taplo format 2>/dev/null
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true
+
+  pinact:
+    desc: '{{.TASK}}'
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: tool:aqua:tag:pinact
+    sources:
+    - '.github/**/*.yml'
+    - '.github/**/*.yaml'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - pinact run
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true
+
+  rustfmt:
+    desc: '{{.TASK}}'
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: tool:rustup:component:rustfmt
+    sources:
+    - '.rustfmt.toml'
+    - '**/*.rs'
+    - '.*/**/*.rs'
+    - exclude: '.git/**/*'
+    - exclude: '.task/**/*'
+    - exclude: 'target/**/*'
+    - exclude: 'dist/**/*'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - cargo fmt --all
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true

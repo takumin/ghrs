@@ -1,0 +1,50 @@
+# cargo-deny configuration -- dependency advisory / license / bans / sources policy.
+# Reference: https://embarkstudios.github.io/cargo-deny/
+#
+# The required `audit` job runs `cargo deny check` (advisories + bans + licenses +
+# sources) on every PR and push to main -- see .github/workflows/ci.yml and
+# wc-audit.yml -- a vulnerable or policy-violating dependency fails the required
+# CI check.
+
+[graph]
+# Evaluate the full feature graph so optionally-enabled and platform-specific
+# dependencies are still policy-checked.
+all-features = true
+
+[advisories]
+# The RustSec advisory database gates the tree. Any unlisted advisory fails the
+# `advisories` check. Add an ID here only with a comment justifying why it is not
+# actionable (e.g. no fixed version yet, not reachable from our usage).
+ignore = []
+# Fail (rather than cargo-deny's default `warn`) when a locked crate has been
+# yanked from the registry, so a dependency bump onto a yanked version is caught.
+yanked = "deny"
+
+[licenses]
+# Allow-list only: every crate's SPDX expression must be satisfiable by this set,
+# so a dependency introducing an unlisted (e.g. copyleft) license fails CI and
+# forces a human decision -- important given Renovate `automerge: true`.
+#
+# This is the minimal set that covers the current dependency tree. Each entry is
+# load-bearing; the trailing note names a representative crate that requires it.
+allow = [
+  "Apache-2.0",   # bulk of the tree (MIT OR Apache-2.0)
+  "MIT",          # bulk of the tree
+  "ISC",          # rustls, rustls-webpki, ring, untrusted, aws-lc-rs / aws-lc-sys
+  "BSD-3-Clause", # subtle, aws-lc-sys component
+  "Unicode-3.0",  # icu_*, zerovec, yoke, tinystr, unicode-ident
+]
+
+[bans]
+# Duplicate transitive versions already exist in the tree (syn 2/3, windows-sys,
+# getrandom, untrusted). Warn rather than deny: surface duplication growth without
+# failing CI on pre-existing, unavoidable duplicates.
+multiple-versions = "warn"
+# A wildcard ("*") version requirement defeats version pinning -- reject it.
+wildcards = "deny"
+
+[sources]
+# Trust only crates.io. A dependency repointed at a git or alternate registry
+# source (a supply-chain red flag) fails the check.
+unknown-registry = "deny"
+unknown-git = "deny"

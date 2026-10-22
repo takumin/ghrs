@@ -1,0 +1,347 @@
+//! Assembling the `plan`. Fetches the current state, runs name resolution, and computes the diff,
+//! in that order.
+//!
+//! `apply` uses this result as is.
+
+use anyhow::{Result, bail};
+use serde::Serialize;
+use serde_json::{Map, Value as Json, json};
+use toml::Value as Toml;
+
+use crate::access;
+use crate::auth::SelfApp;
+use crate::cli::Resource;
+use crate::diagnostic::Diagnostics;
+use crate::diff::{self, Action, Op, ResourceChange};
+use crate::github::GitHub;
+use crate::model::Config;
+use crate::repo::RepoRef;
+use crate::resolve::{self, Directory};
+use crate::schema::PARAMETERIZED_RULES;
+use crate::state::{self, RulesetState};
+use crate::validate;
+
+#[derive(Serialize)]
+pub struct Plan {
+    pub repository: String,
+    pub changes: Vec<ResourceChange>,
+    /// Resources not declared but kept because `--prune` is absent (in the form `ruleset "x"`)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ignored: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    pub summary: Summary,
+    /// Number of write requests apply sends
+    pub writes: usize,
+    /// Writes apply performs, ordered by apply order.
+    #[serde(skip)]
+    pub steps: Vec<Step>,
+}
+
+pub enum Step {
+    Repository {
+        /// Fields with changes, sent to `PATCH /repos/{o}/{r}`
+        fields: Map<String, Json>,
+        /// topics are fully replaced via a separate endpoint
+        topics: Option<Json>,
+    },
+    GrantCollaborator {
+        login: String,
+        permission: String,
+    },
+    UpdateInvitation {
+        login: String,
+        id: u64,
+        permission: String,
+    },
+    RevokeCollaborator {
+        login: String,
+    },
+    DeleteInvitation {
+        login: String,
+        id: u64,
+    },
+    GrantTeam {
+        slug: String,
+        permission: String,
+    },
+    RevokeTeam {
+        slug: String,
+    },
+    CreateRuleset {
+        name: String,
+        body: Json,
+    },
+    UpdateRuleset {
+        name: String,
+        id: u64,
+        body: Json,
+    },
+    DeleteRuleset {
+        name: String,
+        id: u64,
+    },
+}
+
+impl Step {
+    pub fn label(&self) -> String {
+        match self {
+            Step::Repository { .. } => "repository".to_string(),
+            Step::GrantCollaborator { login, permission } => {
+                format!("grant {permission} to collaborator \"{login}\"")
+            }
+            Step::UpdateInvitation {
+                login, permission, ..
+            } => {
+                format!("change invitation of collaborator \"{login}\" to {permission}")
+            }
+            Step::RevokeCollaborator { login } => format!("remove collaborator \"{login}\""),
+            Step::DeleteInvitation { login, .. } => {
+                format!("cancel invitation of collaborator \"{login}\"")
+            }
+            Step::GrantTeam { slug, permission } => {
+                format!("grant {permission} to team \"{slug}\"")
+            }
+            Step::RevokeTeam { slug } => format!("remove team \"{slug}\""),
+            Step::CreateRuleset { name, .. } => format!("create ruleset \"{name}\""),
+            Step::UpdateRuleset { name, .. } => format!("update ruleset \"{name}\""),
+            Step::DeleteRuleset { name, .. } => format!("delete ruleset \"{name}\""),
+        }
+    }
+
+    pub fn is_ruleset(&self) -> bool {
+        matches!(
+            self,
+            Step::CreateRuleset { .. } | Step::UpdateRuleset { .. } | Step::DeleteRuleset { .. }
+        )
+    }
+
+    /// Whether a failure breaks the precondition for applying subsequent rulesets.
+    /// Some settings may not allow a ruleset to be created unless visibility changes.
+    ///
+    /// Granting team permissions is not a precondition. A team without access to the repository
+    /// can still be placed in bypass_actors (observed).
+    pub fn gates_rulesets(&self) -> bool {
+        matches!(self, Step::Repository { fields, .. } if fields.contains_key("visibility"))
+    }
+
+    /// Number of requests this step sends.
+    pub fn writes(&self) -> usize {
+        match self {
+            Step::Repository { fields, topics } => {
+                usize::from(!fields.is_empty()) + usize::from(topics.is_some())
+            }
+            _ => 1,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct Summary {
+    pub add: usize,
+    pub change: usize,
+    pub destroy: usize,
+}
+
+/// Targets narrowed by `--only`. Kinds outside the scope trigger no API calls at all.
+struct Scope {
+    repository: bool,
+    rulesets: bool,
+    collaborators: bool,
+    teams: bool,
+}
+
+impl Scope {
+    fn new(only: &[Resource]) -> Self {
+        let wants = |r: fn(&Resource) -> bool| only.is_empty() || only.iter().any(r);
+        Self {
+            repository: wants(|r| matches!(r, Resource::Repository)),
+            rulesets: wants(|r| matches!(r, Resource::Ruleset)),
+            collaborators: wants(|r| matches!(r, Resource::Collaborator)),
+            teams: wants(|r| matches!(r, Resource::Team)),
+        }
+    }
+}
+
+pub async fn run(
+    gh: &mut GitHub,
+    config: &Config,
+    target: &RepoRef,
+    only: &[Resource],
+    prune: bool,
+    self_app: Option<&SelfApp>,
+) -> Result<Plan> {
+    let scope = Scope::new(only);
+    let mut warnings = Vec::new();
+
+    // Owner type and visibility are also needed to validate rulesets, so fetch them regardless
+    // of --only
+    let repo = gh.get(&format!("/repos/{target}")).await?;
+    let owned_by_org = repo["owner"]["type"] == "Organization";
+    let visibility = repo["visibility"].as_str().unwrap_or_default();
+    let errors = validate::check_context(
+        config,
+        &target.owner,
+        owned_by_org,
+        visibility,
+        scope.rulesets,
+    );
+    if !errors.is_empty() {
+        return Err(Diagnostics::new(errors).into());
+    }
+
+    let mut changes = Vec::new();
+    let mut steps = Vec::new();
+    if scope.repository {
+        let change = diff::repository(&config.repository, &repo);
+        if let Some(step) = repository_step(config, &change) {
+            steps.push(step);
+        }
+        changes.push(change);
+    }
+
+    let mut ignored = Vec::new();
+
+    // Apply order is repository -> collaborator / team -> ruleset
+    if scope.collaborators {
+        let current = access::current_collaborators(gh, target).await?;
+        let declared: Vec<(&str, &str)> = config
+            .collaborators
+            .iter()
+            .map(|c| (c.login.as_str(), c.permission.as_str()))
+            .collect();
+        let d = access::diff("collaborator", &declared, &current, prune);
+        changes.extend(d.changes);
+        steps.extend(d.steps);
+        ignored.extend(d.ignored);
+        warnings.extend(d.warnings);
+    }
+    // Teams exist only in Organizations. Don't call the API for personal repositories
+    if scope.teams && owned_by_org {
+        let current = access::current_teams(gh, target).await?;
+        let declared: Vec<(&str, &str)> = config
+            .teams
+            .iter()
+            .map(|t| (t.slug.as_str(), t.permission.as_str()))
+            .collect();
+        let d = access::diff("team", &declared, &current, prune);
+        changes.extend(d.changes);
+        steps.extend(d.steps);
+        ignored.extend(d.ignored);
+        warnings.extend(d.warnings);
+    }
+
+    if scope.rulesets {
+        let current = current_rulesets(gh, target, &mut warnings).await?;
+
+        let mut dir = Directory::default();
+        if let Some(app) = self_app {
+            dir.add_self(app.id);
+        }
+        resolve::declared(gh, target, config, &mut dir).await?;
+
+        let mut desired = Vec::new();
+        for decl in &config.rulesets {
+            for (rule, value) in &decl.rules {
+                if matches!(value, Toml::Table(_)) && !PARAMETERIZED_RULES.contains(&rule.as_str())
+                {
+                    warnings.push(format!(
+                        "ruleset \"{}\": rule \"{rule}\" is an unknown rule with parameters; \
+                        passing its value through as is",
+                        decl.name
+                    ));
+                }
+            }
+            let have = current.iter().find(|c| c.name == decl.name);
+            desired.push(state::desired(decl, have, &dir)?);
+        }
+
+        resolve::labels(gh, target, &current, &mut dir).await?;
+        let (rulesets, undeclared) = diff::rulesets(&desired, &current, prune, &dir);
+        for change in &rulesets {
+            let name = change.name.clone().unwrap_or_default();
+            let want = desired.iter().find(|d| d.name == name);
+            let have = current.iter().find(|c| c.name == name);
+            let step = match (change.action, want, have.and_then(|h| h.id)) {
+                (Action::Create, Some(want), _) => Step::CreateRuleset {
+                    name,
+                    body: want.to_api(),
+                },
+                (Action::Update, Some(want), Some(id)) => Step::UpdateRuleset {
+                    name,
+                    id,
+                    body: want.to_api(),
+                },
+                (Action::Delete, _, Some(id)) => Step::DeleteRuleset { name, id },
+                (Action::NoChange, ..) => continue,
+                _ => bail!("cannot build the apply steps for ruleset \"{name}\""),
+            };
+            steps.push(step);
+        }
+        changes.extend(rulesets);
+        ignored.extend(undeclared.iter().map(|name| format!("ruleset \"{name}\"")));
+    }
+
+    let count = |action| changes.iter().filter(|c| c.action == action).count();
+    let summary = Summary {
+        add: count(Action::Create),
+        change: count(Action::Update),
+        destroy: count(Action::Delete),
+    };
+
+    Ok(Plan {
+        repository: target.to_string(),
+        changes,
+        ignored,
+        warnings,
+        summary,
+        writes: steps.iter().map(Step::writes).sum(),
+        steps,
+    })
+}
+
+fn repository_step(config: &Config, change: &ResourceChange) -> Option<Step> {
+    if change.action != Action::Update {
+        return None;
+    }
+    let declared = serde_json::to_value(&config.repository).ok()?;
+    let mut fields = Map::new();
+    let mut topics = None;
+    for field in change.fields.iter().filter(|f| f.op != Op::Same) {
+        if field.path == "topics" {
+            topics = Some(json!({ "names": declared["topics"] }));
+        } else {
+            fields.insert(field.path.clone(), declared[&field.path].clone());
+        }
+    }
+    Some(Step::Repository { fields, topics })
+}
+
+/// Fetch the repository's own rulesets. Rulesets inherited from the Organization cannot be
+/// changed on the repository side, so they are not included.
+async fn current_rulesets(
+    gh: &mut GitHub,
+    target: &RepoRef,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<RulesetState>> {
+    let list = gh
+        .get_all(&format!("/repos/{target}/rulesets?includes_parents=false"))
+        .await?;
+
+    let mut out = Vec::new();
+    for entry in &list {
+        let Some(id) = entry["id"].as_u64() else {
+            bail!("ruleset list entry has no id");
+        };
+        let detail = gh.get(&format!("/repos/{target}/rulesets/{id}")).await?;
+        let state = RulesetState::from_api(&detail)?;
+        for key in state.extra_conditions.keys() {
+            warnings.push(format!(
+                "ruleset \"{}\": keeping unsupported condition \"{key}\" at its current value",
+                state.name
+            ));
+        }
+        out.push(state);
+    }
+    Ok(out)
+}

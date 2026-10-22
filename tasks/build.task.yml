@@ -1,0 +1,115 @@
+---
+# https://taskfile.dev
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+vars:
+  PROJNAME:
+    sh: cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].name'
+  PROFILE: '{{env "BUILD_PROFILE" | default "debug"}}'
+  TARGET: '{{env "BUILD_TARGET" | default "x86_64-unknown-linux-gnu"}}'
+  MATRIX_TARGETS:
+  - x86_64-unknown-linux-gnu
+  - x86_64-unknown-linux-musl
+  - i686-unknown-linux-gnu
+  - i686-unknown-linux-musl
+  - aarch64-unknown-linux-gnu
+  - aarch64-unknown-linux-musl
+  - armv7-unknown-linux-gnueabihf
+  - armv7-unknown-linux-musleabihf
+  # info: zig can provide libc for related target riscv64-linux.4.15.0-gnu.2.27
+  # info: zig can provide libc for related target riscv64-linux.4.15.0-musl
+  # - riscv64gc-unknown-linux-gnu
+  # - riscv64gc-unknown-linux-musl
+
+includes:
+  setup:
+    taskfile: setup.task.yml
+    internal: true
+
+tasks:
+  default:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - task: build
+    - task: sha256sum
+
+  matrix:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - echo '{{ .MATRIX_TARGETS | toJson }}' | jq -cM -f scripts/build-matrix.jq
+
+  build:
+    desc: '{{.TASK}}'
+    dir: '{{.ROOT_DIR}}'
+    label: build:{{.PROFILE}}:{{.TARGET}}
+    deps:
+    - task: setup:build
+      vars:
+        PROFILE: '{{.PROFILE}}'
+        TARGET: '{{.TARGET}}'
+    sources:
+    - 'Cargo.toml'
+    - 'Cargo.lock'
+    - 'src/**/*.rs'
+    generates:
+    - target/{{.TARGET}}/{{.PROFILE}}/{{.PROJNAME}}
+    - dist/{{.PROJNAME}}-{{.PROFILE}}-{{.TARGET}}
+    vars:
+      MOLD_RUN: '{{if contains "-linux-" .TARGET}}mold -run{{end}}'
+      PROFILE_ARG: '{{if eq .PROFILE "release"}}--release{{end}}'
+      TARGET_ARG: '--target={{.TARGET}}{{if contains "-linux-gnu" .TARGET}}.2.17{{end}}'
+      # When the target matches the host, zig's clang looks for a host GCC install
+      # and, with more than one present (as on GitHub runners), warns about which it
+      # picks. aws-lc-sys probes compiler features with -Werror, so that warning
+      # fails every probe and the build falls back to getentropy, which glibc 2.17
+      # lacks. cc reads CFLAGS_<target>, so silence just this warning. Set on the
+      # command line because Task does not template `env` keys.
+      CFLAGS_ARG: 'CFLAGS_{{.TARGET | replace "-" "_"}}=-Wno-gcc-install-dir-libstdcxx'
+    cmds:
+    - '{{.CFLAGS_ARG}} {{.MOLD_RUN}} cargo zigbuild --frozen {{.PROFILE_ARG}} {{.TARGET_ARG}}'
+    - mkdir -p dist
+    - cp target/{{.TARGET}}/{{.PROFILE}}/{{.PROJNAME}} dist/{{.PROJNAME}}-{{.PROFILE}}-{{.TARGET}}
+
+  sha256sum:
+    desc: '{{.TASK}}'
+    label: sha256sum:{{.PROFILE}}:{{.TARGET}}
+    dir: '{{.ROOT_DIR}}/dist'
+    deps:
+    - task: setup:build
+      vars:
+        PROFILE: '{{.PROFILE}}'
+        TARGET: '{{.TARGET}}'
+    - task: build
+      vars:
+        PROFILE: '{{.PROFILE}}'
+        TARGET: '{{.TARGET}}'
+    vars:
+      ARTIFACT: '{{.PROJNAME}}-{{.PROFILE}}-{{.TARGET}}'
+    sources:
+    - '{{.ARTIFACT}}'
+    generates:
+    - '{{.ARTIFACT}}.sha256sum'
+    cmds:
+    - coreutils sha256sum "{{.ARTIFACT}}" > "{{.ARTIFACT}}.sha256sum"
+
+  sha256sum:verify:
+    desc: '{{.TASK}}'
+    label: sha256sum:verify:{{.PROFILE}}:{{.TARGET}}
+    dir: '{{.ROOT_DIR}}/dist'
+    deps:
+    - task: setup:build
+      vars:
+        PROFILE: '{{.PROFILE}}'
+        TARGET: '{{.TARGET}}'
+    - task: sha256sum
+      vars:
+        PROFILE: '{{.PROFILE}}'
+        TARGET: '{{.TARGET}}'
+    vars:
+      ARTIFACT: '{{.PROJNAME}}-{{.PROFILE}}-{{.TARGET}}'
+    cmds:
+    - coreutils sha256sum -c "{{.ARTIFACT}}.sha256sum"

@@ -1,0 +1,44 @@
+---
+# https://taskfile.dev
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  setup:
+    taskfile: setup.task.yml
+    internal: true
+
+tasks:
+  default:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - task: doc
+
+  doc:
+    desc: '{{.TASK}}'
+    label: doc:workspace
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: setup:test
+    # -D warnings turns every rustdoc diagnostic into a build failure: broken
+    # intra-doc links, invalid HTML in doc comments, and doc-test rot. Set here
+    # (not only in CI) so `task doc` reproduces the CI gate locally.
+    env:
+      RUSTDOCFLAGS: -D warnings
+    sources:
+    - 'Cargo.toml'
+    - 'Cargo.lock'
+    - 'src/**/*.rs'
+    # Fingerprint the task's own definition and the pinned toolchain so editing
+    # this task's commands or bumping rust-toolchain.toml re-runs it locally
+    # instead of being skipped on a stale .task/.done_* marker.
+    - 'tasks/doc.task.yml'
+    - 'rust-toolchain.toml'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - cargo doc --frozen --workspace --no-deps --all-features
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true

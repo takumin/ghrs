@@ -1,0 +1,55 @@
+---
+name: Format
+on:
+  workflow_call:
+permissions: {}
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+concurrency:
+  group: format-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Restore aqua cache
+      id: aqua-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: aqua-format-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.aqua/**/*.yaml', '.github/workflows/*.yml') }}
+        restore-keys: |-
+          aqua-format-${{ runner.os }}-${{ runner.arch }}-
+        path: ~/.local/share/aquaproj-aqua/
+    - name: Setup aqua
+      uses: aquaproj/aqua-installer@611554c6f0137ba41c8dd15aca8bee82504ea461 # v4.1.1
+      with:
+        aqua_version: v2.65.2
+        # The cache key hashes the workflows that pin aqua_version, so only an
+        # exact hit is known to hold this aqua; a prefix hit reinstalls it.
+        skip_install_aqua: ${{ steps.aqua-cache.outputs.cache-hit == 'true' }}
+    - name: Format files
+      run: |-
+        task format
+    - name: Detected changes
+      run: |-
+        git reset
+        git -c core.fileMode=false add --all
+        git diff --name-only --staged --no-renames --exit-code
+    - name: Vacuum aqua packages
+      if: github.ref == 'refs/heads/main' && steps.aqua-cache.outputs.cache-hit != 'true'
+      run: task tool:aqua:vacuum
+    - name: Save aqua cache
+      if: github.ref == 'refs/heads/main' && steps.aqua-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: ${{ steps.aqua-cache.outputs.cache-primary-key }}
+        path: ~/.local/share/aquaproj-aqua/

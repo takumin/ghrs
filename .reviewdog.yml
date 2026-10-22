@@ -1,0 +1,31 @@
+---
+runner:
+  editorconfig-checker:
+    cmd: editorconfig-checker -no-color -format default
+    errorformat:
+    - '%-G%+P%f:'
+    - '%\s%+%l: %m'
+    - '%-Q'
+    - '%-G%.%#'
+  shellcheck:
+    cmd: fd -H -E .git/ -E .task/ -t f -e sh -e bash -X shellcheck -f json {} | jq -M -n '[inputs[]]' | jq -M -f scripts/reviewdog-shellcheck.jq
+    format: rdjson
+  jactionlint:
+    cmd: jactionlint --shellcheck shellcheck --format sarif
+    format: sarif
+  ghalint-run:
+    cmd: ghalint --log-color never run
+    errorformat:
+    - '%.%#error="%m" job_name=%.%#workflow_file_path=%f'
+    - '%-G%.%#'
+  ghalint-act:
+    cmd: ghalint --log-color never act
+    errorformat:
+    - '%.%#action_file_path=%f error="%m" policy_name=%.%#'
+    - '%-G%.%#'
+  zizmor:
+    cmd: zizmor --quiet --no-progress --format=sarif .
+    format: sarif
+  clippy:
+    cmd: cargo clippy --quiet --all-targets --all-features --message-format json | clippy-reviewdog-filter
+    format: checkstyle

@@ -1,0 +1,50 @@
+---
+# https://taskfile.dev
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  tool:
+    taskfile: tool.task.yml
+    internal: true
+
+tasks:
+  test:
+    desc: '{{.TASK}}'
+    silent: true
+    deps:
+    - task: tool:aqua:tag:rustup
+    - task: tool:cargo:fetch
+
+  coverage:
+    desc: '{{.TASK}}'
+    silent: true
+    deps:
+    - task: tool:aqua:tag:cargo-llvm-cov
+    # cargo-llvm-cov needs the LLVM coverage tooling (llvm-profdata/llvm-cov)
+    # shipped by the toolchain's llvm-tools component; installs the pinned
+    # toolchain first via the component task's own dependency.
+    - task: tool:rustup:component:llvm-tools
+    - task: tool:cargo:fetch
+
+  build:
+    desc: '{{.TASK}}'
+    silent: true
+    vars:
+      TARGET: '{{env "BUILD_TARGET" | default "x86_64-unknown-linux-gnu"}}'
+    deps:
+    - task: build:aqua
+    - task: tool:rustup:target:{{.TARGET}}
+    - task: tool:cargo:fetch
+
+  build:aqua:
+    desc: '{{.TASK}}'
+    silent: true
+    deps:
+    - task: tool:aqua:tag:rustup
+    - task: tool:aqua:tag:cargo-zigbuild
+    - task: tool:aqua:tag:zig
+    - task: tool:aqua:tag:mold
+    - task: tool:aqua:tag:sccache
+    - task: tool:aqua:tag:coreutils

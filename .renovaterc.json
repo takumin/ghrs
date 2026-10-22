@@ -1,0 +1,39 @@
+{
+	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
+	"extends": [
+		"config:best-practices",
+		"github>aquaproj/aqua-renovate-config#2.13.0",
+		"github>aquaproj/aqua-renovate-config:file#2.13.0(.aqua/.*\\.ya?ml)",
+		"github>aquaproj/aqua-renovate-config:file#2.13.0(.aqua/pkgs/.*\\.ya?ml)"
+	],
+	"timezone": "Asia/Tokyo",
+	"automerge": true,
+	"lockFileMaintenance": {
+		"enabled": true
+	},
+	"customManagers": [
+		{
+			"customType": "regex",
+			"description": "Keep the MSRV in step with the pinned toolchain in rust-toolchain.toml",
+			"managerFilePatterns": ["/(^|/)Cargo\\.toml$/"],
+			"matchStrings": ["\\nrust-version = \"(?<currentValue>\\d+\\.\\d+)\""],
+			"depNameTemplate": "rust",
+			"datasourceTemplate": "rust-version",
+			"versioningTemplate": "rust-release-channel",
+			"depTypeTemplate": "msrv"
+		}
+	],
+	"packageRules": [
+		{
+			"description": "Raise the lower bound in Cargo.toml along with Cargo.lock",
+			"matchManagers": ["cargo"],
+			"rangeStrategy": "bump"
+		},
+		{
+			"description": "Update the toolchain pin and the MSRV in one PR",
+			"matchDatasources": ["rust-version"],
+			"matchDepNames": ["rust"],
+			"groupName": "rust"
+		}
+	]
+}

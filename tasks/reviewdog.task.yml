@@ -1,0 +1,185 @@
+---
+# https://taskfile.dev
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  tool:
+    taskfile: tool.task.yml
+    internal: true
+
+vars:
+  # Base reviewdog flags applied in every environment (local and CI). These are
+  # the lint gate: -filter-mode nofilter lints the whole tree (not just changed
+  # lines) and -fail-level any makes reviewdog exit non-zero on any finding, so
+  # lint issues fail the job. CI appends its own flags via the REVIEWDOG_ARGS
+  # env var (see the reviewdog task); they are added to these, not substituted,
+  # so the gate can never be silently dropped.
+  REVIEWDOG_ARGS:
+  - -filter-mode 'nofilter'
+  - -log-level 'warning'
+  - -fail-level 'any'
+
+tasks:
+  default:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - task: editorconfig-checker
+    - task: shellcheck
+    - task: jactionlint
+    - task: ghalint-run
+    - task: ghalint-act
+    - task: zizmor
+    - task: clippy
+
+  matrix:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - task -aj | jq -cM -f scripts/actions-matrix.jq
+
+  reviewdog:
+    internal: true
+    label: 'reviewdog:{{.REVIEWDOG_RUNNER}}'
+    deps:
+    - task: tool:aqua:tag:reviewdog
+    cmds:
+    # Base flags always apply; REVIEWDOG_ARGS (env) is appended as extra flags,
+    # so CI can add debug logging without dropping the -fail-level gate. For a
+    # repeated flag reviewdog keeps the last value (Go's flag package).
+    - >-
+      reviewdog
+      -runners '{{.REVIEWDOG_RUNNER}}'
+      -reporter '{{env "REVIEWDOG_REPORTER" | default "local"}}'
+      {{.REVIEWDOG_ARGS | join " "}}
+      {{env "REVIEWDOG_ARGS"}}
+
+  editorconfig-checker:
+    desc: '{{.TASK}}'
+    deps:
+    - task: tool:aqua:tag:editorconfig-checker
+    sources:
+    - '**/*'
+    - '.*/**/*'
+    - exclude: '.git/**/*'
+    - exclude: '.task/**/*'
+    - exclude: 'target/**/*'
+    - exclude: 'dist/**/*'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - task: reviewdog
+      vars:
+        REVIEWDOG_RUNNER: '{{splitList ":" .TASK | last}}'
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true
+
+  shellcheck:
+    desc: '{{.TASK}}'
+    deps:
+    - task: tool:aqua:tag:shellcheck
+    sources:
+    - '**/*.sh'
+    - '**/*.bash'
+    - '.*/**/*.sh'
+    - '.*/**/*.bash'
+    - exclude: '.git/**/*'
+    - exclude: '.task/**/*'
+    - exclude: 'target/**/*'
+    - exclude: 'dist/**/*'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - task: reviewdog
+      vars:
+        REVIEWDOG_RUNNER: '{{splitList ":" .TASK | last}}'
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true
+
+  jactionlint:
+    desc: '{{.TASK}}'
+    deps:
+    - task: tool:aqua:tag:jactionlint
+    sources:
+    - '.github/**/*.yml'
+    - '.github/**/*.yaml'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - task: reviewdog
+      vars:
+        REVIEWDOG_RUNNER: '{{splitList ":" .TASK | last}}'
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true
+
+  ghalint-run:
+    desc: '{{.TASK}}'
+    deps:
+    - task: tool:aqua:tag:ghalint
+    sources:
+    - '.github/**/*.yml'
+    - '.github/**/*.yaml'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - task: reviewdog
+      vars:
+        REVIEWDOG_RUNNER: '{{splitList ":" .TASK | last}}'
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true
+
+  ghalint-act:
+    desc: '{{.TASK}}'
+    deps:
+    - task: tool:aqua:tag:ghalint
+    sources:
+    - '.github/**/*.yml'
+    - '.github/**/*.yaml'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - task: reviewdog
+      vars:
+        REVIEWDOG_RUNNER: '{{splitList ":" .TASK | last}}'
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true
+
+  zizmor:
+    desc: '{{.TASK}}'
+    deps:
+    - task: tool:aqua:tag:zizmor
+    sources:
+    - '.github/**/*.yml'
+    - '.github/**/*.yaml'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - task: reviewdog
+      vars:
+        REVIEWDOG_RUNNER: '{{splitList ":" .TASK | last}}'
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true
+
+  clippy:
+    desc: '{{.TASK}}'
+    deps:
+    - task: tool:aqua:tag:clippy-reviewdog-filter
+    - task: tool:rustup:component:clippy
+    - task: tool:cargo:fetch
+    sources:
+    - '**/*.rs'
+    # Fingerprint the task's own definition and the pinned toolchain so editing
+    # this task's commands or bumping rust-toolchain.toml re-runs it locally
+    # instead of being skipped on a stale .task/.done_* marker.
+    - 'tasks/reviewdog.task.yml'
+    - 'rust-toolchain.toml'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - task: reviewdog
+      vars:
+        REVIEWDOG_RUNNER: '{{splitList ":" .TASK | last}}'
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true
