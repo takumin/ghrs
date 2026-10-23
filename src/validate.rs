@@ -50,7 +50,18 @@ pub fn parse(text: &str) -> Result<Config, Diagnostics> {
 }
 
 fn deserialize_error(err: serde_path_to_error::Error<toml::de::Error>, text: &str) -> Diagnostic {
+    use serde_path_to_error::Segment;
     let path = key_path(err.path());
+    // Taken from the segments rather than the rendered path, where a quoted key may hold a `.`
+    let keys: Vec<String> = err
+        .path()
+        .iter()
+        .map(|segment| match segment {
+            Segment::Map { key } | Segment::Enum { variant: key } => key.clone(),
+            _ => String::new(),
+        })
+        .collect();
+    let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
     let err = err.into_inner();
     let message = err.message();
     let Some(expected) = message.strip_prefix("unknown field `").map(expected_keys) else {
@@ -61,11 +72,10 @@ fn deserialize_error(err: serde_path_to_error::Error<toml::de::Error>, text: &st
         };
     };
     let path = path.unwrap_or_default();
-    let (parent, key) = match path.rsplit_once('.') {
-        Some((parent, key)) => (parent, key),
-        None => ("", path.as_str()),
-    };
-    if parent.ends_with(".rules") && PUSH_RULES.contains(&key) {
+    let key = keys.last().copied().unwrap_or_default();
+    if let ["ruleset", _, "rules", key] = keys[..]
+        && PUSH_RULES.contains(&key)
+    {
         return Diagnostic::error(
             Code::PushRule,
             format!("{key} is a push ruleset rule and cannot be used in branch or tag rulesets"),
@@ -1176,6 +1186,21 @@ permission = "maintain"
             1
         );
         assert!(check_context(&config, "takumin", true, "public", &ALL).is_empty());
+    }
+
+    /// The key is told apart from the path even when it is quoted and holds a `.`
+    #[test]
+    fn names_quoted_unknown_keys() {
+        let d = parse_error("[repository]\n\"has.wiki\" = true");
+        assert_eq!(d.code, Code::UnknownKey);
+        assert_eq!(d.message, "unknown key `has.wiki`");
+
+        // A ruleset named "rules" is not a rules table
+        let d = parse_error(&format!(
+            "{}\nmax_file_size = 1",
+            ruleset("").replace("[ruleset.r]", "[ruleset.rules]")
+        ));
+        assert_eq!(d.code, Code::UnknownKey, "{d:?}");
     }
 
     #[test]
