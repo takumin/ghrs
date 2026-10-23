@@ -173,7 +173,10 @@ optional_table! {
         tag_name_pattern: Rule<Pattern>,
         workflows: Rule<Workflows>,
         code_scanning: Rule<CodeScanning>,
+        code_quality: Rule<CodeQuality>,
+        code_coverage: Rule<CodeCoverage>,
         copilot_code_review: Rule<CopilotCodeReview>,
+        license_compliance_scanning: bool,
     }
 }
 
@@ -202,6 +205,8 @@ impl Rules {
             | "tag_name_pattern" => Pattern::KEYS,
             "workflows" => Workflows::KEYS,
             "code_scanning" => CodeScanning::KEYS,
+            "code_quality" => CodeQuality::KEYS,
+            "code_coverage" => CodeCoverage::KEYS,
             "copilot_code_review" => CopilotCodeReview::KEYS,
             _ => return None,
         })
@@ -403,6 +408,21 @@ pub struct CodeScanningTool {
     pub alerts_threshold: String,
     pub security_alerts_threshold: String,
     pub tool: String,
+}
+
+optional_table! {
+    pub struct CodeQuality {
+        /// `errors`, `warnings`, `notes` or `all`
+        severity: String,
+    }
+}
+
+optional_table! {
+    /// Coverage in percent
+    pub struct CodeCoverage {
+        minimum_coverage: f64,
+        max_coverage_drop: f64,
+    }
 }
 
 optional_table! {

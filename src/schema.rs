@@ -16,8 +16,8 @@ pub const ROLES_WITHOUT_WRITE: &[&str] = &["read", "triage"];
 /// Rules known to have parameters. A rule listed here and written as `true` is sent with an
 /// empty parameter object rather than without parameters.
 ///
-/// Derived from the members of the GraphQL `RuleParameters` union. REST has no exhaustive list
-/// of rule types, so this union is the only authoritative source.
+/// Derived from the members of the GraphQL `RuleParameters` union, which matches the rules with
+/// `parameters` in the `repository-rule` schema of the REST API description.
 pub const PARAMETERIZED_RULES: &[&str] = &[
     "update",
     "pull_request",
@@ -30,6 +30,8 @@ pub const PARAMETERIZED_RULES: &[&str] = &[
     "tag_name_pattern",
     "merge_queue",
     "code_scanning",
+    "code_quality",
+    "code_coverage",
     "copilot_code_review",
     "workflows",
     "file_extension_restriction",
@@ -63,6 +65,8 @@ pub const REQUIRED_PARAMS: &[(&str, &[&str])] = &[
         &["required_deployment_environments"],
     ),
     ("code_scanning", &["code_scanning_tools"]),
+    // Required in the REST API description; not observed
+    ("code_quality", &["severity"]),
     ("workflows", &["workflows"]),
 ];
 

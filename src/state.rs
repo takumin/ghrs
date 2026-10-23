@@ -268,7 +268,20 @@ pub fn desired(
 /// `copilot_code_review` is the opposite: even when sent without parameters or with only some,
 /// GitHub returns it with missing keys filled with false (observed). Only old rulesets are
 /// returned without parameters. The normal form has all keys, so changes are shown per field.
+///
+/// `code_coverage` takes percentages as numbers, so `80` and `80.0` mean the same. The model
+/// reads them as floats, so the normal form writes whole numbers as integers.
 fn normalize(mut rules: BTreeMap<String, Option<Json>>) -> BTreeMap<String, Option<Json>> {
+    if let Some(Some(Json::Object(params))) = rules.get_mut("code_coverage") {
+        for value in params.values_mut() {
+            if let Some(f) = value.as_f64()
+                && f.fract() == 0.0
+                && f.abs() < 1e15
+            {
+                *value = json!(f as i64);
+            }
+        }
+    }
     if let Some(params) = rules.get_mut("update")
         && *params == Some(json!({ "update_allows_fetch_and_merge": false }))
     {
@@ -483,6 +496,25 @@ mod tests {
         let want = desired(&decl(""), Some(&cur), &Directory::default()).unwrap();
         assert_eq!(want.rules.keys().collect::<Vec<_>>(), ["future_rule"]);
         assert_eq!(want.rules["future_rule"], Some(json!({ "x": 1 })));
+    }
+
+    #[test]
+    fn code_coverage_compares_whole_numbers_as_integers() {
+        let cur = current(json!([{
+            "type": "code_coverage",
+            "parameters": { "minimum_coverage": 80, "max_coverage_drop": 0.5 }
+        }]));
+        let want = desired(
+            &decl("[rules.code_coverage]\nminimum_coverage = 80\nmax_coverage_drop = 0.5"),
+            Some(&cur),
+            &Directory::default(),
+        )
+        .unwrap();
+        assert_eq!(want.rules["code_coverage"], cur.rules["code_coverage"]);
+        assert_eq!(
+            want.rules["code_coverage"],
+            Some(json!({ "minimum_coverage": 80, "max_coverage_drop": 0.5 }))
+        );
     }
 
     #[test]
