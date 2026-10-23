@@ -230,7 +230,7 @@ impl Importer {
             }
             "Integration" => {
                 let id = actor_id.context("Integration has no actor_id")?;
-                let name = self.app_slug(id, &format!("ruleset \"{ruleset}\"")).await;
+                let name = self.app_slug(id, &format!("ruleset \"{ruleset}\"")).await?;
                 ("integration", Some(name))
             }
             "OrganizationAdmin" => ("organization_admin", None),
@@ -297,14 +297,15 @@ impl Importer {
     /// Someone else's private App returns 404, and there is no way to map the ID to a name
     /// (`/user/installations` requires the App's user-to-server token, and
     /// `/orgs/{org}/installations` does not exist for personal accounts). When it cannot be
-    /// resolved, output the numeric ID as-is and warn.
-    async fn app_slug(&mut self, id: u64, context: &str) -> String {
+    /// resolved, output the numeric ID as-is and warn. Other errors (rate limits, network) are
+    /// not a private App, so they stop the import instead of writing an ID.
+    async fn app_slug(&mut self, id: u64, context: &str) -> Result<String> {
         if let Some(slug) = self.app_names.get(&id) {
-            return slug.clone();
+            return Ok(slug.clone());
         }
-        let slug = match self.get(format!("/app/{id}")).await {
-            Ok(v) => string_or_empty(&v["slug"]),
-            Err(_) => {
+        let slug = match self.gh.get_optional(&format!("/app/{id}")).await? {
+            Some(v) => string_or_empty(&v["slug"]),
+            None => {
                 self.warn(format!(
                     "{context}: cannot resolve App ID {id} to a name (probably a private App); \
                     wrote the numeric ID instead"
@@ -313,7 +314,7 @@ impl Importer {
             }
         };
         self.app_names.insert(id, slug.clone());
-        slug
+        Ok(slug)
     }
 
     /// Fold the rule array into a table.
@@ -345,7 +346,7 @@ impl Importer {
                     Json::Bool(true)
                 }
                 ("required_status_checks", Some(params)) => {
-                    self.status_checks(ruleset, params).await
+                    self.status_checks(ruleset, params).await?
                 }
                 ("pull_request", Some(params)) => {
                     let params = self.named_review_actors(ruleset, params).await;
@@ -406,7 +407,7 @@ impl Importer {
         params
     }
 
-    async fn status_checks(&mut self, ruleset: &str, params: &Json) -> Json {
+    async fn status_checks(&mut self, ruleset: &str, params: &Json) -> Result<Json> {
         let mut checks = Vec::new();
         for check in params["required_status_checks"]
             .as_array()
@@ -427,7 +428,7 @@ impl Importer {
             if let Some(id) = check["integration_id"].as_u64() {
                 let name = self
                     .app_slug(id, &format!("ruleset \"{ruleset}\" status check"))
-                    .await;
+                    .await?;
                 entry.insert("integration".to_string(), Json::String(name));
             }
             checks.push(Json::Object(entry));
@@ -446,7 +447,7 @@ impl Importer {
             out.insert(key.to_string(), value.clone());
         }
         out.insert("checks".to_string(), Json::Array(checks));
-        Json::Object(out)
+        Ok(Json::Object(out))
     }
 
     fn plain_params(
