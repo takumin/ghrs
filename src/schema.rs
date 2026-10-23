@@ -302,6 +302,7 @@ pub fn actor_type_to_api(toml: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn rule_references_point_into_the_rest_api_description() {
@@ -329,6 +330,105 @@ mod tests {
         assert_eq!(rule_reference("ruleset.main.rulesx"), None);
         assert_eq!(rule_reference("ruleset.main.bypass_actors[0]"), None);
         assert_eq!(rule_reference("repository.allow_rebase"), None);
+    }
+
+    /// Parameters the API returns but [`REST_API_DESCRIPTION`] does not document (observed).
+    const UNDOCUMENTED_PARAMS: &[(&str, &str)] = &[(
+        "pull_request",
+        "require_extra_approval_for_unattributed_changes",
+    )];
+
+    /// Checks [`Rules`] against [`REST_API_DESCRIPTION`]. Downloads the file with curl, so it is
+    /// run separately by `task test:rest-api`.
+    #[test]
+    #[ignore = "downloads the REST API description; run task test:rest-api"]
+    fn rules_match_the_rest_api_description() {
+        let output = std::process::Command::new("curl")
+            .args(["-fsSL", "--retry", "3", REST_API_DESCRIPTION])
+            .output()
+            .expect("cannot run curl");
+        assert!(
+            output.status.success(),
+            "cannot download {REST_API_DESCRIPTION}"
+        );
+        let api: Json = serde_json::from_slice(&output.stdout).unwrap();
+        let schemas = &api["components"]["schemas"];
+
+        let mut documented = BTreeMap::new();
+        for entry in schemas["repository-rule"]["oneOf"].as_array().unwrap() {
+            let name = entry["$ref"]
+                .as_str()
+                .unwrap()
+                .trim_start_matches("#/components/schemas/");
+            let rule = schemas[name]["properties"]["type"]["enum"][0]
+                .as_str()
+                .unwrap();
+            assert_eq!(
+                name,
+                rule_schema(rule),
+                "rule_reference relies on this naming"
+            );
+            let params = &schemas[name]["properties"]["parameters"];
+            let keys: BTreeSet<&str> = params["properties"]
+                .as_object()
+                .map(|p| p.keys().map(String::as_str).collect())
+                .unwrap_or_default();
+            let required: Vec<&str> = params["required"]
+                .as_array()
+                .map(|r| r.iter().filter_map(Json::as_str).collect())
+                .unwrap_or_default();
+            documented.insert(rule, (keys, required));
+        }
+
+        let known: BTreeSet<&str> = Rules::KEYS.iter().chain(PUSH_RULES).copied().collect();
+        let types: BTreeSet<&str> = documented.keys().copied().collect();
+        assert_eq!(known, types, "rule types");
+
+        for rule in Rules::KEYS {
+            let (keys, required) = &documented[rule];
+            let ours: BTreeSet<&str> = match *rule {
+                // The TOML side uses shorter names; see state::declared_params
+                "required_status_checks" => [
+                    "do_not_enforce_on_create",
+                    "required_status_checks",
+                    "strict_required_status_checks_policy",
+                ]
+                .into(),
+                _ => Rules::param_keys(rule)
+                    .unwrap_or_default()
+                    .iter()
+                    .copied()
+                    .collect(),
+            };
+            let ours: BTreeSet<&str> = ours
+                .into_iter()
+                .filter(|key| !UNDOCUMENTED_PARAMS.contains(&(*rule, *key)))
+                .collect();
+            assert_eq!(&ours, keys, "parameters of {rule}");
+            assert_eq!(
+                PARAMETERIZED_RULES.contains(rule),
+                !keys.is_empty(),
+                "{rule} in PARAMETERIZED_RULES"
+            );
+
+            // A new rule must be sent with every required parameter. `update = true` is sent
+            // without parameters (observed), so it is the exception.
+            if *rule == "update" {
+                continue;
+            }
+            let user = REQUIRED_PARAMS
+                .iter()
+                .find(|(r, _)| r == rule)
+                .map(|(_, p)| *p)
+                .unwrap_or_default();
+            let defaults = rule_defaults(rule).unwrap_or_default();
+            for key in required {
+                assert!(
+                    user.contains(key) || defaults.get(key).is_some(),
+                    "required parameter {rule}.{key} is neither in REQUIRED_PARAMS nor defaulted"
+                );
+            }
+        }
     }
 
     /// Before changing the constant tables, record the observed evidence first.

@@ -75,6 +75,9 @@ jobs:
     - name: Test
       run: |-
         task test
+    - name: Test against the REST API description
+      run: |-
+        task test:rest-api
     - name: sccache stats
       if: ${{ !startsWith(github.ref, 'refs/tags/') }}
       run: sccache --show-stats

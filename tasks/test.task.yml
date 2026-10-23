@@ -38,3 +38,13 @@ tasks:
     - cargo test --frozen --workspace
     - cmd: touch .task/.done_{{.TASK}}
       silent: true
+
+  rest-api:
+    desc: '{{.TASK}}'
+    label: test:rest-api
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: setup:test
+    cmds:
+    # Downloads the REST API description pinned in src/schema.rs
+    - cargo test --frozen --workspace -- --ignored rest_api_description
