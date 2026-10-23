@@ -265,6 +265,15 @@ fn ruleset(
             want.name
         ));
     }
+    if have.is_some() {
+        destructive.extend(
+            fields
+                .0
+                .iter()
+                .filter_map(weakening)
+                .map(|message| format!("ruleset \"{}\": {message}", want.name)),
+        );
+    }
 
     let action = match have {
         None => Action::Create,
@@ -377,6 +386,125 @@ fn bypass_strength(mode: &str) -> u8 {
         "always" => 1,
         _ => 2,
     }
+}
+
+/// Parameters whose change in one direction weakens protection, by their path in the diff.
+/// Parameters without a clear direction (patterns, merge queue tuning, etc.) are not listed.
+const WEAKENING_PARAMS: &[(&str, Weakens)] = &[
+    (
+        "rules.pull_request.required_approving_review_count",
+        Weakens::Decrease,
+    ),
+    (
+        "rules.pull_request.dismiss_stale_reviews_on_push",
+        Weakens::Disable,
+    ),
+    (
+        "rules.pull_request.require_code_owner_review",
+        Weakens::Disable,
+    ),
+    (
+        "rules.pull_request.require_extra_approval_for_unattributed_changes",
+        Weakens::Disable,
+    ),
+    (
+        "rules.pull_request.require_last_push_approval",
+        Weakens::Disable,
+    ),
+    (
+        "rules.pull_request.required_review_thread_resolution",
+        Weakens::Disable,
+    ),
+    ("rules.pull_request.required_reviewers", Weakens::Remove),
+    (
+        "rules.pull_request.dismissal_restriction.enabled",
+        Weakens::Disable,
+    ),
+    ("rules.required_status_checks.strict", Weakens::Disable),
+    (
+        "rules.required_status_checks.do_not_enforce_on_create",
+        Weakens::Enable,
+    ),
+    ("rules.required_status_checks.checks", Weakens::Remove),
+    (
+        "rules.required_deployments.required_deployment_environments",
+        Weakens::Remove,
+    ),
+    (
+        "rules.update.update_allows_fetch_and_merge",
+        Weakens::Enable,
+    ),
+    ("rules.workflows.do_not_enforce_on_create", Weakens::Enable),
+    ("rules.workflows.workflows", Weakens::Remove),
+    ("rules.code_scanning.code_scanning_tools", Weakens::Remove),
+    ("rules.code_coverage.minimum_coverage", Weakens::Decrease),
+    ("rules.code_coverage.max_coverage_drop", Weakens::Increase),
+];
+
+#[derive(Clone, Copy)]
+enum Weakens {
+    /// `true` -> `false`
+    Disable,
+    /// `false` -> `true`
+    Enable,
+    Decrease,
+    Increase,
+    /// Removing an element of the array
+    Remove,
+}
+
+/// Why a field change on an existing ruleset weakens protection, if it does.
+fn weakening(field: &FieldChange) -> Option<String> {
+    let path = field.path.as_str();
+    match (field.op, path) {
+        (Op::Change, "target") => {
+            return Some(format!(
+                "changes target from {} to {}; the refs it covered lose protection",
+                field.before.as_ref()?,
+                field.after.as_ref()?
+            ));
+        }
+        (Op::Remove, "conditions.include") => {
+            return Some(format!(
+                "removes {} from conditions.include",
+                field.before.as_ref()?
+            ));
+        }
+        (Op::Add, "conditions.exclude") => {
+            return Some(format!(
+                "adds {} to conditions.exclude",
+                field.after.as_ref()?
+            ));
+        }
+        (Op::Remove, _) if path.starts_with("rules.") && !path["rules.".len()..].contains('.') => {
+            return Some(format!("removes rule {}", &path["rules.".len()..]));
+        }
+        _ => {}
+    }
+
+    let (_, weakens) = WEAKENING_PARAMS.iter().find(|(p, _)| *p == path)?;
+    let (before, after) = (field.before.as_ref(), field.after.as_ref());
+    let weakened = match (weakens, field.op) {
+        (Weakens::Remove, Op::Remove) => return Some(format!("removes an entry from {path}")),
+        (Weakens::Disable, Op::Change | Op::Remove) => before == Some(&json!(true)),
+        (Weakens::Enable, Op::Change | Op::Add) => {
+            after == Some(&json!(true)) && before != Some(&json!(true))
+        }
+        (Weakens::Decrease, Op::Change) => {
+            before.and_then(Json::as_f64) > after.and_then(Json::as_f64)
+        }
+        (Weakens::Increase, Op::Change) => {
+            before.and_then(Json::as_f64) < after.and_then(Json::as_f64)
+        }
+        _ => false,
+    };
+    weakened.then(|| {
+        format!(
+            "changes {path} from {} to {}",
+            before.map_or_else(|| "unset".to_string(), Json::to_string),
+            after.map_or_else(|| "unset".to_string(), Json::to_string),
+        )
+    })
 }
 
 /// Only `required_status_checks` uses short key names on the TOML side.
@@ -619,6 +747,73 @@ mod tests {
         let want = state("active", vec![admin("always")], json!([]));
         let (changes, _) = rulesets(&[want], &[have], false, &Directory::default());
         assert_eq!(changes[0].destructive.len(), 1);
+    }
+
+    #[test]
+    fn flags_weakening_rules_and_conditions() {
+        let have = RulesetState::from_api(&json!({
+            "id": 1, "name": "r", "target": "branch", "enforcement": "active",
+            "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH", "refs/heads/release"],
+                                          "exclude": [] } },
+            "bypass_actors": [],
+            "rules": [
+                { "type": "deletion" },
+                { "type": "pull_request", "parameters": {
+                    "required_approving_review_count": 2,
+                    "require_code_owner_review": true,
+                    "dismiss_stale_reviews_on_push": false,
+                } },
+                { "type": "required_status_checks", "parameters": {
+                    "strict_required_status_checks_policy": true,
+                    "required_status_checks": [{ "context": "test" }, { "context": "build" }],
+                } },
+            ],
+        }))
+        .unwrap();
+        let want = RulesetState::from_api(&json!({
+            "id": 1, "name": "r", "target": "tag", "enforcement": "active",
+            "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"],
+                                          "exclude": ["refs/heads/tmp"] } },
+            "bypass_actors": [],
+            "rules": [
+                { "type": "pull_request", "parameters": {
+                    "required_approving_review_count": 1,
+                    "require_code_owner_review": false,
+                    // Strengthening is not flagged
+                    "dismiss_stale_reviews_on_push": true,
+                } },
+                { "type": "required_status_checks", "parameters": {
+                    "strict_required_status_checks_policy": true,
+                    "required_status_checks": [{ "context": "test" }],
+                } },
+            ],
+        }))
+        .unwrap();
+        let (changes, _) = rulesets(&[want], &[have], false, &Directory::default());
+        assert_eq!(
+            changes[0].destructive,
+            [
+                "ruleset \"r\": changes target from \"branch\" to \"tag\"; the refs it covered \
+                 lose protection",
+                "ruleset \"r\": removes \"refs/heads/release\" from conditions.include",
+                "ruleset \"r\": adds \"refs/heads/tmp\" to conditions.exclude",
+                "ruleset \"r\": removes rule deletion",
+                "ruleset \"r\": changes rules.pull_request.require_code_owner_review from true \
+                 to false",
+                "ruleset \"r\": changes rules.pull_request.required_approving_review_count from \
+                 2 to 1",
+                "ruleset \"r\": removes an entry from rules.required_status_checks.checks",
+            ]
+        );
+    }
+
+    /// A new ruleset weakens nothing, whatever it declares
+    #[test]
+    fn creation_is_not_weakening() {
+        let want = state("active", vec![], json!([]));
+        let (changes, _) = rulesets(&[want], &[], false, &Directory::default());
+        assert_eq!(changes[0].action, Action::Create);
+        assert!(changes[0].destructive.is_empty());
     }
 
     #[test]

@@ -71,6 +71,7 @@ Common options for `plan` and `apply`:
 
 `apply` additionally takes `--yes` to skip the confirmation prompt, and `--no-fail-fast` to continue with independent steps after an error.
 When a change weakens protection, `apply` asks you to type the repository name instead of `yes`.
+For an existing ruleset, that covers deleting it, disabling it, changing its target, narrowing its conditions, removing a rule, widening bypass actors, and relaxing parameters such as lowering the required approvals or removing a required status check.
 Without a terminal, `apply` refuses to proceed unless `--yes` is given.
 
 `drift --exit-code` exits with status 2 when there is a difference, which is useful for scheduled checks in CI.
