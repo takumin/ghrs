@@ -154,6 +154,7 @@ The exception is a parameter inside an element of an array (for example, an entr
 Unknown keys are rejected, including rule names and rule parameters, so a misspelled key fails instead of being silently ignored.
 The error names the key's path and suggests the closest allowed key.
 The declaration is validated before any API call, and settings that GitHub would reject with an unexplained 422 (for example, organization-only rules in a personal repository) are reported up front.
+A new rule missing a required parameter (for example, `merge_queue = true`) is reported the same way once the current rulesets are read, before any change is made.
 With `--json`, these errors are written to standard output as structured diagnostics with a code, a path, and a suggested fix.
 
 Rulesets inherited from the organization are not managed.

@@ -56,6 +56,7 @@ codes! {
     NumericIdKey = "E0210",
     OrgOnlyRule = "E0213",
     DismissalRestrictionOnPersonal = "E0214",
+    MissingRequiredParams = "E0215",
     // E03xx: bypass actors and pull_request actors
     UnknownActorType = "E0301",
     BypassModeNotAllowed = "E0302",

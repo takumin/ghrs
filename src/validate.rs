@@ -19,7 +19,7 @@ fn allowed(values: &[&str]) -> String {
 
 /// Path of a keyed entry such as `ruleset.main`. A key that is not a bare TOML key is quoted
 /// (`ruleset."release/*"`).
-fn entry_path(table: &str, key: &str) -> String {
+pub fn entry_path(table: &str, key: &str) -> String {
     let bare = !key.is_empty()
         && key
             .bytes()

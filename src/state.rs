@@ -9,12 +9,14 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value as Json, json};
 use std::collections::BTreeMap;
 
+use crate::diagnostic::{Code, Diagnostic, Diagnostics};
 use crate::model::{Rules, Ruleset};
 use crate::resolve::Directory;
 use crate::schema::{
     ACTORS_WITHOUT_ID, PARAMETERIZED_RULES, REQUIRED_PARAMS, actor_type_to_api,
     for_each_review_actor, review_actor_type_to_api, role_id, rule_defaults,
 };
+use crate::validate;
 
 pub struct RulesetState {
     pub id: Option<u64>,
@@ -193,6 +195,7 @@ pub fn desired(
         .collect::<Result<_>>()?;
 
     let mut rules = BTreeMap::new();
+    let mut missing_params = Vec::new();
     for (rule, value) in &decl.rules.entries() {
         // Newly created rules have no current value to inherit, so fill required parameters with
         // their defaults
@@ -227,10 +230,7 @@ pub fn desired(
                 .copied()
                 .collect();
             if !missing.is_empty() {
-                bail!(
-                    "{at}: rules.{rule} is missing required parameters: {}",
-                    missing.join(", ")
-                );
+                missing_params.push(missing_params_error(decl, rule, &missing));
             }
         }
         // Required by the REST API description inside the table, so REQUIRED_PARAMS cannot hold
@@ -238,11 +238,16 @@ pub fn desired(
         if let Some(restriction) = params.as_ref().and_then(|p| p.get("dismissal_restriction"))
             && restriction.get("enabled").is_none()
         {
-            bail!(
-                "{at}: rules.{rule}.dismissal_restriction is missing required parameters: enabled"
-            );
+            missing_params.push(missing_params_error(
+                decl,
+                &format!("{rule}.dismissal_restriction"),
+                &["enabled"],
+            ));
         }
         rules.insert(rule.clone(), params);
+    }
+    if !missing_params.is_empty() {
+        return Err(Diagnostics::new(missing_params).into());
     }
     if let Some(current) = current {
         for (rule, params) in &current.rules {
@@ -315,6 +320,24 @@ fn normalize(mut rules: BTreeMap<String, Option<Json>>) -> BTreeMap<String, Opti
 
 /// Map a rule's table to API parameters. Only `required_status_checks` is converted, because
 /// the TOML side uses shorter names.
+/// Only the user can decide these values, so there is no fix to suggest. Whether one is missing
+/// depends on the current state, so this is found at plan time rather than by `validate::check`.
+fn missing_params_error(decl: &Ruleset, table: &str, missing: &[&str]) -> Diagnostic {
+    Diagnostic::error(
+        Code::MissingRequiredParams,
+        format!(
+            "ruleset \"{}\": rules.{table} is missing required parameters: {}",
+            decl.name,
+            missing.join(", ")
+        ),
+    )
+    .at(format!(
+        "{}.rules.{table}",
+        validate::entry_path("ruleset", &decl.name)
+    ))
+    .help("a new rule needs every required parameter; GitHub returns a 422 without a reason")
+}
+
 /// Merge declared parameters into the current ones. Nested tables are merged key by key, so a
 /// key not written in them keeps its current value as well. Arrays are replaced as a whole.
 fn merge_params(current: &mut Map<String, Json>, declared: Map<String, Json>) {
@@ -647,7 +670,12 @@ mod tests {
         let Err(err) = desired(&decl, None, &Directory::default()) else {
             panic!("accepted a dismissal_restriction without enabled");
         };
-        assert!(err.to_string().contains("dismissal_restriction"), "{err}");
+        let d = err.downcast::<Diagnostics>().unwrap();
+        assert_eq!(d.diagnostics[0].code, Code::MissingRequiredParams);
+        assert_eq!(
+            d.diagnostics[0].path.as_deref(),
+            Some("ruleset.r.rules.pull_request.dismissal_restriction")
+        );
     }
 
     #[test]

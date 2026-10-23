@@ -234,9 +234,20 @@ pub async fn run(
         resolve::declared(gh, target, config, &mut dir).await?;
 
         let mut desired = Vec::new();
+        let mut errors = Vec::new();
         for decl in &config.rulesets {
             let have = current.iter().find(|c| c.name == decl.name);
-            desired.push(state::desired(decl, have, &dir)?);
+            match state::desired(decl, have, &dir) {
+                Ok(state) => desired.push(state),
+                // Report the declaration errors of every ruleset at once
+                Err(err) => match err.downcast::<Diagnostics>() {
+                    Ok(d) => errors.extend(d.diagnostics),
+                    Err(err) => return Err(err),
+                },
+            }
+        }
+        if !errors.is_empty() {
+            return Err(Diagnostics::new(errors).into());
         }
 
         resolve::labels(gh, target, &current, &mut dir).await?;
