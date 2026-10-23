@@ -18,7 +18,8 @@ pub struct Cli {
 }
 
 /// Credentials. When omitted, resolved in the order GHRS_APP_ID ->
-/// ~/.config/ghrs/config.toml -> GITHUB_TOKEN -> gh auth token. Private keys and tokens
+/// $XDG_CONFIG_HOME/ghrs/config.toml (~/.config/ghrs/config.toml by default) -> GITHUB_TOKEN ->
+/// gh auth token. Private keys and tokens
 /// also accept a 1Password secret reference (op://vault/item/field), read with `op read`
 #[derive(Args)]
 pub struct AuthArgs {
@@ -71,7 +72,7 @@ impl Command {
 
 #[derive(Args)]
 pub struct PlanArgs {
-    /// Target repository (detected from git remote if omitted)
+    /// Target repository (taken from [meta], then from git remote, if omitted)
     #[arg(long, value_name = "OWNER/NAME")]
     pub repo: Option<RepoRef>,
 
@@ -138,7 +139,7 @@ pub struct SchemaArgs {
 
 #[derive(Args)]
 pub struct DriftArgs {
-    /// Target repository (detected from git remote if omitted)
+    /// Target repository (taken from [meta], then from git remote, if omitted)
     #[arg(long, value_name = "OWNER/NAME")]
     pub repo: Option<RepoRef>,
 

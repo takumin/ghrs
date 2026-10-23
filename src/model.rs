@@ -89,7 +89,8 @@ pub struct Config {
     pub teams: Vec<Team>,
 }
 
-/// The target repository. Without it, the target is taken from --repo or the git remote.
+/// The target repository. --repo takes precedence over it, and without either, the target is
+/// taken from the git remote.
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Meta {

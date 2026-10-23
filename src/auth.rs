@@ -34,7 +34,7 @@ pub struct SelfApp {
     pub installation_id: u64,
 }
 
-/// `~/.config/ghrs/config.toml`
+/// `$XDG_CONFIG_HOME/ghrs/config.toml` (`~/.config/ghrs/config.toml` by default)
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UserConfig {
@@ -72,13 +72,19 @@ pub fn resolve(args: &AuthArgs) -> Result<Credential> {
             (Some(key), _) => {
                 decode_key(&read_secret(&key)?).context("cannot read GHRS_PRIVATE_KEY")?
             }
-            (None, Some(path)) => read_key(Path::new(&path))?,
+            (None, Some(path)) => read_key(&expand_home(Path::new(&path)))?,
             (None, None) => bail!(
                 "GHRS_APP_ID is set but no private key is given; \
                 set GHRS_PRIVATE_KEY or GHRS_PRIVATE_KEY_PATH"
             ),
         };
         return Ok(Credential::App { id, key });
+    }
+    // Falling through would use another credential, which fails much later for lack of permission
+    for name in ["GHRS_PRIVATE_KEY", "GHRS_PRIVATE_KEY_PATH"] {
+        if nonempty(std::env::var(name).ok()).is_some() {
+            bail!("{name} is set but GHRS_APP_ID is not; set GHRS_APP_ID as well");
+        }
     }
 
     if let Some(path) = user_config_path()

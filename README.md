@@ -166,11 +166,11 @@ Credentials are resolved in the following order.
 
 1. `--app-id` with `--private-key`, or `--token`
 2. `GHRS_APP_ID` with `GHRS_PRIVATE_KEY` (PEM or base64 PEM) or `GHRS_PRIVATE_KEY_PATH`
-3. `~/.config/ghrs/config.toml`
+3. `$XDG_CONFIG_HOME/ghrs/config.toml` (`~/.config/ghrs/config.toml` when `XDG_CONFIG_HOME` is not set)
 4. `GITHUB_TOKEN`
 5. `gh auth token`
 
-`~/.config/ghrs/config.toml` holds either an App or a token, not both.
+The config file holds either an App or a token, not both.
 
 ```toml
 [app]

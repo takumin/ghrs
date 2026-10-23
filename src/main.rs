@@ -247,10 +247,18 @@ async fn compute_plan(
     auth: &AuthArgs,
 ) -> Result<(GitHub, RepoRef, plan::Plan)> {
     let config = load_config(path)?;
+    // Report declaration errors before reading credentials, which may run `op` or `gh`. Only
+    // `self` depends on the credential, so it is checked once the credential is known
+    let invalid = |is_app| {
+        let errors = validate::check(&config, is_app);
+        (!errors.is_empty()).then(|| in_file(Diagnostics::new(errors).into(), path))
+    };
+    if let Some(err) = invalid(true) {
+        return Err(err);
+    }
     let credential = auth::resolve(auth)?;
-    let errors = validate::check(&config, credential.is_app());
-    if !errors.is_empty() {
-        return Err(in_file(Diagnostics::new(errors).into(), path));
+    if let Some(err) = invalid(credential.is_app()) {
+        return Err(err);
     }
     let target = resolve_target(repo, &config)?;
 
