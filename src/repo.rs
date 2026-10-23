@@ -54,20 +54,39 @@ pub fn resolve(repo: Option<RepoRef>) -> Result<RepoRef> {
 
 /// Extracts owner/name from a GitHub remote URL.
 ///
-/// Accepted forms: `git@github.com:o/r`, and `<scheme>://github.com/o/r` for `https`, `http`,
-/// `ssh` and `git`, optionally with user info (e.g. `ssh://git@github.com/o/r`).
+/// Accepted forms: scp-like `[user@]github.com:o/r`, and
+/// `<scheme>://[userinfo@]github.com[:port]/o/r` for `https`, `http`, `ssh` and `git`. The host
+/// is matched case-insensitively, and `ssh.github.com` (SSH over port 443) is accepted as well.
 /// In all of them, the trailing `.git` and `/` are optional.
 fn parse_remote(url: &str) -> Option<RepoRef> {
-    let path = if let Some(rest) = url.strip_prefix("git@github.com:") {
-        rest
-    } else {
-        let rest = ["https://", "http://", "ssh://", "git://"]
-            .iter()
-            .find_map(|scheme| url.strip_prefix(scheme))?;
-        // Drop user info such as https://user@github.com/...
-        let rest = rest.split_once('@').map_or(rest, |(_, host)| host);
-        rest.strip_prefix("github.com/")?
+    let (host, path) = match ["https://", "http://", "ssh://", "git://"]
+        .iter()
+        .find_map(|scheme| url.strip_prefix(scheme))
+    {
+        Some(rest) => {
+            let (authority, path) = rest.split_once('/')?;
+            // User info may itself contain `@` (e.g. in a password), so take the last one
+            let host = authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host);
+            let host = host.split_once(':').map_or(host, |(host, _port)| host);
+            (host, path)
+        }
+        None if !url.contains("://") => {
+            let (authority, path) = url.split_once(':')?;
+            let host = authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host);
+            (host, path)
+        }
+        None => return None,
     };
+    if !["github.com", "ssh.github.com"]
+        .iter()
+        .any(|h| host.eq_ignore_ascii_case(h))
+    {
+        return None;
+    }
 
     let path = path.trim_end_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
@@ -94,6 +113,12 @@ mod tests {
             "https://token@github.com/takumin/ghrs.git",
             "git@github.com:takumin/ghrs.git",
             "ssh://git@github.com/takumin/ghrs.git",
+            "ssh://git@github.com:22/takumin/ghrs.git",
+            "ssh://git@ssh.github.com:443/takumin/ghrs.git",
+            "org-123@github.com:takumin/ghrs.git",
+            "github.com:takumin/ghrs",
+            "https://GitHub.com/takumin/ghrs",
+            "https://user:p@ss@github.com/takumin/ghrs",
         ] {
             assert_eq!(parse_remote(url), repo("takumin", "ghrs"), "{url}");
         }
@@ -107,6 +132,8 @@ mod tests {
             "https://github.com/takumin",
             "https://github.com/takumin/ghrs/tree/main",
             "/path/to/local/repo",
+            "https://github.com.evil.example/takumin/ghrs",
+            "file://github.com/takumin/ghrs",
         ] {
             assert_eq!(parse_remote(url), None, "{url}");
         }
