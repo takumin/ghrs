@@ -7,5 +7,8 @@ version: '3'
 tasks:
   default:
     desc: '{{.TASK}}'
+    vars:
+      VERSION:
+        sh: cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].version'
     cmds:
-    - git tag "v$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].version')"
+    - git tag -m "v{{.VERSION}}" "v{{.VERSION}}"
