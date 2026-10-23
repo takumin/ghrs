@@ -87,7 +87,7 @@ async fn import(args: ImportArgs, auth: &AuthArgs) -> Result<ExitCode> {
     let (gh, self_app) = auth::connect(auth::resolve(auth)?, &target).await?;
     let mut importer = import::Importer::new(gh, self_app.as_ref());
     let config = importer.run(&target.owner, &target.name).await?;
-    let output = toml::to_string_pretty(&config)?;
+    let output = import::render(&config)?;
 
     match &args.out {
         Some(path) => std::fs::write(path, output)

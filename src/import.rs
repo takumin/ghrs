@@ -456,6 +456,38 @@ impl Importer {
     }
 }
 
+/// Renders the imported declaration. Arrays of tables (`bypass_actors`, `checks`, ...) are written
+/// as inline arrays, one element per line, so that every table header names the ruleset it
+/// belongs to instead of repeating `[[ruleset.main.bypass_actors]]` per element.
+pub fn render(config: &Config) -> Result<String> {
+    let text = toml::to_string_pretty(config)?;
+    let mut doc: toml_edit::DocumentMut = text.parse()?;
+    inline_arrays_of_tables(doc.as_table_mut());
+    Ok(doc.to_string())
+}
+
+fn inline_arrays_of_tables(table: &mut toml_edit::Table) {
+    for (mut key, item) in table.iter_mut() {
+        match item {
+            toml_edit::Item::Table(child) => inline_arrays_of_tables(child),
+            toml_edit::Item::ArrayOfTables(tables) => {
+                let mut array = toml_edit::Array::new();
+                for table in std::mem::take(tables) {
+                    let mut value = toml_edit::Value::InlineTable(table.into_inline_table());
+                    value.decor_mut().set_prefix("\n  ");
+                    array.push_formatted(value);
+                }
+                array.set_trailing("\n");
+                array.set_trailing_comma(true);
+                *item = toml_edit::value(array);
+                // The key of an array of tables has no decor of its own, unlike `key = value`
+                key.leaf_decor_mut().set_suffix(" ");
+            }
+            _ => {}
+        }
+    }
+}
+
 fn json_to_toml(v: &Json) -> Result<Toml> {
     Ok(match v {
         Json::Null => bail!("null cannot be represented in TOML"),
@@ -484,4 +516,64 @@ fn string_array(v: &Json) -> Vec<String> {
     v.as_array()
         .map(|a| a.iter().map(string_or_empty).collect())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_keyed_tables_with_inline_arrays() {
+        let config: Config = toml::from_str(
+            r#"
+[ruleset.main]
+target = "branch"
+enforcement = "active"
+
+[[ruleset.main.bypass_actors]]
+type = "repository_role"
+name = "admin"
+
+[[ruleset.main.bypass_actors]]
+type = "deploy_key"
+
+[ruleset.main.rules.required_status_checks]
+strict = true
+checks = [{ context = "CI", integration = "github-actions" }]
+
+[ruleset.main.rules.pull_request]
+required_reviewers = [{ file_patterns = ["*"], reviewer = { type = "team", name = "t" } }]
+
+[collaborator.octocat]
+permission = "push"
+"#,
+        )
+        .unwrap();
+        let text = render(&config).unwrap();
+        assert!(!text.contains("[["), "{text}");
+        assert!(
+            text.contains(
+                "bypass_actors = [\n  \
+                { type = \"repository_role\", name = \"admin\", mode = \"always\" },\n  \
+                { type = \"deploy_key\", mode = \"always\" },\n]"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "required_reviewers = [\n  \
+                { file_patterns = [\"*\"], reviewer = { type = \"team\", name = \"t\" } },\n]"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("[collaborator.octocat]\npermission = \"push\""),
+            "{text}"
+        );
+
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.rulesets[0].name, "main");
+        assert_eq!(back.rulesets[0].bypass_actors.len(), 2);
+        assert_eq!(back.collaborators[0].login, "octocat");
+    }
 }
