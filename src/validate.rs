@@ -17,6 +17,20 @@ fn allowed(values: &[&str]) -> String {
     format!("allowed values: {}", values.join(" / "))
 }
 
+/// Path of a keyed entry such as `ruleset.main`. A key that is not a bare TOML key is quoted
+/// (`ruleset."release/*"`).
+fn entry_path(table: &str, key: &str) -> String {
+    let bare = !key.is_empty()
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if bare {
+        format!("{table}.{key}")
+    } else {
+        format!("{table}.{}", serde_json::Value::from(key))
+    }
+}
+
 fn remove(path: &str) -> Edit {
     Edit::Remove {
         path: path.to_string(),
@@ -56,29 +70,21 @@ pub fn check(config: &Config, app_auth: bool) -> Vec<Diagnostic> {
         );
     }
 
-    let mut names = HashSet::new();
-    for (i, ruleset) in config.rulesets.iter().enumerate() {
-        if !names.insert(ruleset.name.as_str()) {
-            errors.push(
-                Diagnostic::error(
-                    Code::DuplicateRuleset,
-                    format!("ruleset \"{}\" is declared more than once", ruleset.name),
-                )
-                .at(format!("ruleset[{i}].name"))
-                .help("ruleset names must be unique; rename or merge one of them"),
-            );
-        }
-        check_ruleset(&format!("ruleset[{i}]"), ruleset, app_auth, &mut errors);
+    for ruleset in &config.rulesets {
+        check_ruleset(
+            &entry_path("ruleset", &ruleset.name),
+            ruleset,
+            app_auth,
+            &mut errors,
+        );
     }
 
     let mut logins = HashSet::new();
-    for (i, c) in config.collaborators.iter().enumerate() {
-        let path = format!("collaborator[{i}]");
+    for c in &config.collaborators {
+        let path = entry_path("collaborator", &c.login);
         if c.login.is_empty() {
-            errors.push(
-                Diagnostic::error(Code::EmptyLogin, "collaborator login is empty")
-                    .at(format!("{path}.login")),
-            );
+            errors
+                .push(Diagnostic::error(Code::EmptyLogin, "collaborator login is empty").at(&path));
         }
         // GitHub logins are case-insensitive
         if !logins.insert(c.login.to_ascii_lowercase()) {
@@ -87,7 +93,7 @@ pub fn check(config: &Config, app_auth: bool) -> Vec<Diagnostic> {
                     Code::DuplicateCollaborator,
                     format!("collaborator \"{}\" is declared more than once", c.login),
                 )
-                .at(format!("{path}.login"))
+                .at(&path)
                 .help("logins are case-insensitive; keep one entry per user"),
             );
         }
@@ -95,15 +101,15 @@ pub fn check(config: &Config, app_auth: bool) -> Vec<Diagnostic> {
     }
 
     let mut slugs = HashSet::new();
-    for (i, t) in config.teams.iter().enumerate() {
-        let path = format!("team[{i}]");
+    for t in &config.teams {
+        let path = entry_path("team", &t.slug);
         if !slugs.insert(t.slug.to_ascii_lowercase()) {
             errors.push(
                 Diagnostic::error(
                     Code::DuplicateTeam,
                     format!("team \"{}\" is declared more than once", t.slug),
                 )
-                .at(format!("{path}.slug"))
+                .at(&path)
                 .help("slugs are case-insensitive; keep one entry per team"),
             );
         }
@@ -143,8 +149,8 @@ pub fn check_context(
 ) -> Vec<Diagnostic> {
     let mut errors = Vec::new();
 
-    for (i, c) in config.collaborators.iter().enumerate() {
-        let path = format!("collaborator[{i}]");
+    for c in &config.collaborators {
+        let path = entry_path("collaborator", &c.login);
         if c.login.eq_ignore_ascii_case(owner) {
             // The owner is always admin, so removing it changes nothing on the GitHub side
             errors.push(
@@ -193,14 +199,15 @@ pub fn check_context(
                 "team is only available on Organization-owned repositories",
             )
             .at("team")
-            .help("teams exist only in Organizations; remove the [[team]] entries"),
+            .help("teams exist only in Organizations; remove the [team.*] tables"),
         );
     }
     if !owned_by_org && rulesets_in_scope {
-        for (i, ruleset) in config.rulesets.iter().enumerate() {
+        for ruleset in &config.rulesets {
+            let base = entry_path("ruleset", &ruleset.name);
             for (rule, value) in &ruleset.rules {
                 if ORG_ONLY_RULES.contains(&rule.as_str()) && value.as_bool() != Some(false) {
-                    let path = format!("ruleset[{i}].rules.{rule}");
+                    let path = format!("{base}.rules.{rule}");
                     errors.push(
                         Diagnostic::error(
                             Code::OrgOnlyRule,
@@ -219,9 +226,10 @@ pub fn check_context(
     }
 
     if !owned_by_org {
-        for (i, ruleset) in config.rulesets.iter().enumerate() {
+        for ruleset in &config.rulesets {
+            let base = entry_path("ruleset", &ruleset.name);
             for (j, actor) in ruleset.bypass_actors.iter().enumerate() {
-                let path = format!("ruleset[{i}].bypass_actors[{j}]");
+                let path = format!("{base}.bypass_actors[{j}]");
                 if actor.actor_type == "team" {
                     errors.push(
                         Diagnostic::error(
@@ -251,7 +259,7 @@ pub fn check_context(
                 // Accepted on personal repositories but not saved, so plan shows a diff every time
                 // (observed)
                 if table.contains_key("dismissal_restriction") {
-                    let path = format!("ruleset[{i}].rules.pull_request.dismissal_restriction");
+                    let path = format!("{base}.rules.pull_request.dismissal_restriction");
                     errors.push(
                         Diagnostic::error(
                             Code::DismissalRestrictionOnPersonal,
@@ -277,7 +285,7 @@ pub fn check_context(
                                     ruleset.name
                                 ),
                             )
-                            .at(format!("ruleset[{i}].{path}")),
+                            .at(format!("{base}.{path}")),
                         );
                     }
                 }
@@ -325,10 +333,7 @@ fn check_ruleset(base: &str, ruleset: &Ruleset, app_auth: bool, errors: &mut Vec
     let at = format!("ruleset \"{}\"", ruleset.name);
 
     if ruleset.name.is_empty() {
-        errors.push(
-            Diagnostic::error(Code::EmptyRulesetName, "ruleset name is empty")
-                .at(format!("{base}.name")),
-        );
+        errors.push(Diagnostic::error(Code::EmptyRulesetName, "ruleset name is empty").at(base));
     }
     if !TARGETS.contains(&ruleset.target.as_str()) {
         errors.push(
@@ -782,26 +787,26 @@ mod tests {
     }
 
     fn ruleset(body: &str) -> String {
-        format!("[[ruleset]]\nname = \"r\"\ntarget = \"branch\"\nenforcement = \"active\"\n{body}")
+        format!("[ruleset.r]\ntarget = \"branch\"\nenforcement = \"active\"\n{body}")
     }
 
     #[test]
     fn accepts_spec_sample() {
         let toml = ruleset(
             r#"
-[[ruleset.bypass_actors]]
+[[ruleset.r.bypass_actors]]
 type = "integration"
 name = "renovate"
 mode = "pull_request"
 
-[[ruleset.bypass_actors]]
+[[ruleset.r.bypass_actors]]
 type = "organization_admin"
 
-[ruleset.rules]
+[ruleset.r.rules]
 deletion = true
 update = true
 
-[ruleset.rules.required_status_checks]
+[ruleset.r.rules.required_status_checks]
 strict = true
 checks = [{ context = "test" }, { context = "build", integration = "github-actions" }]
 "#,
@@ -824,7 +829,7 @@ checks = [{ context = "test" }, { context = "build", integration = "github-actio
     #[test]
     fn rejects_too_many_rulesets() {
         let many: String = (0..=MAX_RULESETS)
-            .map(|i| ruleset("").replace("name = \"r\"", &format!("name = \"r{i}\"")))
+            .map(|i| ruleset("").replace("[ruleset.r]", &format!("[ruleset.r{i}]")))
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(errors(&many).len(), 1);
@@ -833,22 +838,38 @@ checks = [{ context = "test" }, { context = "build", integration = "github-actio
     #[test]
     fn rejects_duplicate_names() {
         let toml = format!("{}\n{}", ruleset(""), ruleset(""));
-        assert_eq!(errors(&toml).len(), 1);
+        assert!(toml::from_str::<Config>(&toml).is_err());
+    }
+
+    #[test]
+    fn rejects_array_of_tables() {
+        let toml = "[[ruleset]]\nname = \"r\"\ntarget = \"branch\"\nenforcement = \"active\"";
+        assert!(toml::from_str::<Config>(toml).is_err());
+    }
+
+    #[test]
+    fn quotes_keys_that_are_not_bare() {
+        assert_eq!(entry_path("ruleset", "main"), "ruleset.main");
+        assert_eq!(
+            entry_path("ruleset", "release/v1"),
+            "ruleset.\"release/v1\""
+        );
+        assert_eq!(entry_path("ruleset", ""), "ruleset.\"\"");
     }
 
     #[test]
     fn rejects_numeric_ids_except_integration() {
         let toml = ruleset(
             r#"
-[[ruleset.bypass_actors]]
+[[ruleset.r.bypass_actors]]
 type = "integration"
 name = "12345"
 
-[[ruleset.bypass_actors]]
+[[ruleset.r.bypass_actors]]
 type = "team"
 name = "678"
 
-[ruleset.rules.workflows]
+[ruleset.r.rules.workflows]
 workflows = [{ repository_id = 1, path = "a.yml" }]
 "#,
         );
@@ -857,13 +878,13 @@ workflows = [{ repository_id = 1, path = "a.yml" }]
         assert_eq!(errors[0].code, Code::NumericActorName);
         assert_eq!(
             errors[1].path.as_deref(),
-            Some("ruleset[0].rules.workflows.workflows[0].repository_id")
+            Some("ruleset.r.rules.workflows.workflows[0].repository_id")
         );
     }
 
     #[test]
     fn rejects_self_under_pat() {
-        let toml = ruleset("[[ruleset.bypass_actors]]\ntype = \"integration\"\nname = \"self\"");
+        let toml = ruleset("[[ruleset.r.bypass_actors]]\ntype = \"integration\"\nname = \"self\"");
         assert_eq!(errors(&toml).len(), 1);
         let config: Config = toml::from_str(&toml).unwrap();
         assert!(check(&config, true).is_empty());
@@ -873,19 +894,19 @@ workflows = [{ repository_id = 1, path = "a.yml" }]
     fn checks_actor_constraints() {
         let toml = ruleset(
             r#"
-[[ruleset.bypass_actors]]
+[[ruleset.r.bypass_actors]]
 type = "organization_admin"
 name = "x"
 
-[[ruleset.bypass_actors]]
+[[ruleset.r.bypass_actors]]
 type = "deploy_key"
 mode = "pull_request"
 
-[[ruleset.bypass_actors]]
+[[ruleset.r.bypass_actors]]
 type = "deploy_key"
 name = "ci"
 
-[[ruleset.bypass_actors]]
+[[ruleset.r.bypass_actors]]
 type = "repository_role"
 name = "owner"
 "#,
@@ -893,7 +914,7 @@ name = "owner"
         assert_eq!(errors(&toml).len(), 4);
 
         let tag = ruleset(
-            "[[ruleset.bypass_actors]]\ntype = \"organization_admin\"\nmode = \"pull_request\"",
+            "[[ruleset.r.bypass_actors]]\ntype = \"organization_admin\"\nmode = \"pull_request\"",
         )
         .replace("branch", "tag");
         assert_eq!(errors(&tag).len(), 1);
@@ -901,7 +922,7 @@ name = "owner"
 
     #[test]
     fn rejects_team_on_personal_repository() {
-        let toml = ruleset("[[ruleset.bypass_actors]]\ntype = \"team\"\nname = \"maintainers\"");
+        let toml = ruleset("[[ruleset.r.bypass_actors]]\ntype = \"team\"\nname = \"maintainers\"");
         let config: Config = toml::from_str(&toml).unwrap();
         assert_eq!(
             check_context(&config, "takumin", false, "public", true).len(),
@@ -912,7 +933,7 @@ name = "owner"
 
     #[test]
     fn rejects_organization_admin_on_personal_repository() {
-        let toml = ruleset("[[ruleset.bypass_actors]]\ntype = \"organization_admin\"");
+        let toml = ruleset("[[ruleset.r.bypass_actors]]\ntype = \"organization_admin\"");
         let config: Config = toml::from_str(&toml).unwrap();
         assert_eq!(
             check_context(&config, "takumin", false, "public", true).len(),
@@ -924,16 +945,13 @@ name = "owner"
     #[test]
     fn checks_collaborators_and_teams() {
         let toml = r#"
-[[collaborator]]
-login = "Alice"
+[collaborator.Alice]
 permission = "push"
 
-[[collaborator]]
-login = "alice"
+[collaborator.alice]
 permission = "write"
 
-[[team]]
-slug = "maintainers"
+[team.maintainers]
 permission = "maintain"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
@@ -941,16 +959,13 @@ permission = "maintain"
         assert_eq!(errors.len(), 2, "{errors:?}");
 
         let toml = r#"
-[[collaborator]]
-login = "TAKUMIN"
+[collaborator.TAKUMIN]
 permission = "push"
 
-[[collaborator]]
-login = "bob"
+[collaborator.bob]
 permission = "admin"
 
-[[team]]
-slug = "maintainers"
+[team.maintainers]
 permission = "maintain"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
@@ -968,7 +983,7 @@ permission = "maintain"
 
     #[test]
     fn rejects_org_only_rules_on_personal_repository() {
-        let toml = ruleset("[ruleset.rules]\nmerge_queue = true\nbranch_name_pattern = false");
+        let toml = ruleset("[ruleset.r.rules]\nmerge_queue = true\nbranch_name_pattern = false");
         let config: Config = toml::from_str(&toml).unwrap();
         assert_eq!(
             check_context(&config, "takumin", false, "public", true).len(),
@@ -979,16 +994,16 @@ permission = "maintain"
 
     #[test]
     fn rejects_push_rules() {
-        let toml = ruleset("[ruleset.rules.max_file_size]\nmax_file_size = 10");
+        let toml = ruleset("[ruleset.r.rules.max_file_size]\nmax_file_size = 10");
         assert_eq!(errors(&toml).len(), 1);
-        assert!(errors(&ruleset("[ruleset.rules]\nmax_file_size = false")).is_empty());
+        assert!(errors(&ruleset("[ruleset.r.rules]\nmax_file_size = false")).is_empty());
     }
 
     #[test]
     fn rejects_roles_without_write() {
         for role in ["read", "triage"] {
             let toml = ruleset(&format!(
-                "[[ruleset.bypass_actors]]\ntype = \"repository_role\"\nname = \"{role}\""
+                "[[ruleset.r.bypass_actors]]\ntype = \"repository_role\"\nname = \"{role}\""
             ));
             assert_eq!(errors(&toml).len(), 1, "{role}");
         }
@@ -996,14 +1011,14 @@ permission = "maintain"
 
     #[test]
     fn rejects_branch_only_rules_on_tag_rulesets() {
-        let body = "[ruleset.rules]\ncopilot_code_review = true\ncode_scanning = false\n\
-                    [ruleset.rules.pull_request]\nrequired_approving_review_count = 1";
+        let body = "[ruleset.r.rules]\ncopilot_code_review = true\ncode_scanning = false\n\
+                    [ruleset.r.rules.pull_request]\nrequired_approving_review_count = 1";
         assert!(errors(&ruleset(body)).is_empty());
         let tag = ruleset(body).replace("\"branch\"", "\"tag\"");
         assert_eq!(errors(&tag).len(), 2);
 
         let pattern =
-            "[ruleset.rules.tag_name_pattern]\noperator = \"starts_with\"\npattern = \"v\"";
+            "[ruleset.r.rules.tag_name_pattern]\noperator = \"starts_with\"\npattern = \"v\"";
         assert_eq!(errors(&ruleset(pattern)).len(), 1);
         assert!(errors(&ruleset(pattern).replace("\"branch\"", "\"tag\"")).is_empty());
     }
@@ -1011,7 +1026,7 @@ permission = "maintain"
     #[test]
     fn ref_patterns_need_target_prefix() {
         let conditions = |include: &str| {
-            format!("[ruleset.conditions]\ninclude = [{include}]\nexclude = [\"main\"]")
+            format!("[ruleset.r.conditions]\ninclude = [{include}]\nexclude = [\"main\"]")
         };
         let branch = ruleset(&conditions(r#""~DEFAULT_BRANCH", "~ALL", "refs/heads/x""#));
         assert_eq!(errors(&branch).len(), 1);
@@ -1025,7 +1040,7 @@ permission = "maintain"
 
     #[test]
     fn checks_review_actors() {
-        let pr = |body: &str| ruleset(&format!("[ruleset.rules.pull_request]\n{body}"));
+        let pr = |body: &str| ruleset(&format!("[ruleset.r.rules.pull_request]\n{body}"));
         let ok = pr(
             "required_reviewers = [{ reviewer = { type = \"team\", name = \"t\" } }]\n\
                     dismissal_restriction = { allowed_actors = [{ type = \"user\", name = \"u\" }, \
@@ -1071,21 +1086,21 @@ permission = "maintain"
     #[test]
     fn organization_admin_has_a_machine_applicable_fix() {
         let toml = ruleset(
-            "[[ruleset.bypass_actors]]\ntype = \"deploy_key\"\n\n\
-            [[ruleset.bypass_actors]]\ntype = \"organization_admin\"",
+            "[[ruleset.r.bypass_actors]]\ntype = \"deploy_key\"\n\n\
+            [[ruleset.r.bypass_actors]]\ntype = \"organization_admin\"",
         );
         let config: Config = toml::from_str(&toml).unwrap();
         let errors = check_context(&config, "takumin", false, "public", true);
         assert_eq!(errors.len(), 1);
         let d = &errors[0];
         assert_eq!(d.code, Code::OrganizationAdminOnPersonal);
-        assert_eq!(d.path.as_deref(), Some("ruleset[0].bypass_actors[1]"));
+        assert_eq!(d.path.as_deref(), Some("ruleset.r.bypass_actors[1]"));
         assert_eq!(
             d.fix,
             Some(Fix {
                 applicability: Applicability::MachineApplicable,
                 edit: Edit::Remove {
-                    path: "ruleset[0].bypass_actors[1]".to_string()
+                    path: "ruleset.r.bypass_actors[1]".to_string()
                 },
             })
         );
@@ -1093,13 +1108,13 @@ permission = "maintain"
 
     #[test]
     fn ref_pattern_fix_adds_the_prefix_only_to_bare_names() {
-        let toml = ruleset("[ruleset.conditions]\ninclude = [\"main\", \"refs/tags/v*\"]");
+        let toml = ruleset("[ruleset.r.conditions]\ninclude = [\"main\", \"refs/tags/v*\"]");
         let errors = errors(&toml);
         assert_eq!(errors.len(), 2);
         assert_eq!(
             errors[0].fix.as_ref().map(|f| &f.edit),
             Some(&Edit::Set {
-                path: "ruleset[0].conditions.include[0]".to_string(),
+                path: "ruleset.r.conditions.include[0]".to_string(),
                 value: serde_json::json!("refs/heads/main"),
             })
         );

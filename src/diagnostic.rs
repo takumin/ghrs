@@ -36,7 +36,8 @@ codes! {
     TooManyRulesets = "E0102",
     RulesetsOnPrivate = "E0103",
     // E02xx: ruleset
-    DuplicateRuleset = "E0201",
+    // E0201 (duplicate ruleset name) is retired: rulesets are keyed by name, so TOML itself
+    // rejects a duplicate
     EmptyRulesetName = "E0202",
     TargetNotAllowed = "E0203",
     EvaluateEnforcement = "E0204",
@@ -117,7 +118,7 @@ pub struct Diagnostic {
     pub code: Code,
     pub severity: Severity,
     pub message: String,
-    /// Location in the declaration file (e.g. `ruleset[0].bypass_actors[1]`). Absent for
+    /// Location in the declaration file (e.g. `ruleset.main.bypass_actors[1]`). Absent for
     /// file-wide diagnostics
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -241,18 +242,18 @@ mod tests {
     #[test]
     fn renders_text_and_json_from_the_same_data() {
         let d = Diagnostic::error(Code::OrganizationAdminOnPersonal, "m")
-            .at("ruleset[0].bypass_actors[1]")
+            .at("ruleset.main.bypass_actors[1]")
             .help("h")
             .fix(
                 Applicability::MachineApplicable,
                 Edit::Remove {
-                    path: "ruleset[0].bypass_actors[1]".to_string(),
+                    path: "ruleset.main.bypass_actors[1]".to_string(),
                 },
             );
         assert_eq!(
             d.to_string(),
-            "error[E0312]: m\n  --> ruleset[0].bypass_actors[1]\n  = help: h\n  \
-            = fix (machine-applicable): remove ruleset[0].bypass_actors[1]"
+            "error[E0312]: m\n  --> ruleset.main.bypass_actors[1]\n  = help: h\n  \
+            = fix (machine-applicable): remove ruleset.main.bypass_actors[1]"
         );
         assert_eq!(
             serde_json::to_value(&d).unwrap(),
@@ -260,11 +261,11 @@ mod tests {
                 "code": "E0312",
                 "severity": "error",
                 "message": "m",
-                "path": "ruleset[0].bypass_actors[1]",
+                "path": "ruleset.main.bypass_actors[1]",
                 "help": "h",
                 "fix": {
                     "applicability": "machine-applicable",
-                    "edit": { "op": "remove", "path": "ruleset[0].bypass_actors[1]" }
+                    "edit": { "op": "remove", "path": "ruleset.main.bypass_actors[1]" }
                 }
             })
         );

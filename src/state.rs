@@ -410,8 +410,10 @@ mod tests {
     use super::*;
 
     fn decl(body: &str) -> Ruleset {
-        let toml = format!("name = \"r\"\ntarget = \"branch\"\nenforcement = \"active\"\n{body}");
-        toml::from_str(&toml).unwrap()
+        let toml = format!("target = \"branch\"\nenforcement = \"active\"\n{body}");
+        let mut decl: Ruleset = toml::from_str(&toml).unwrap();
+        decl.name = "r".to_string();
+        decl
     }
 
     fn current(rules: Json) -> RulesetState {
