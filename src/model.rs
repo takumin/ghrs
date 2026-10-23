@@ -89,7 +89,8 @@ pub struct Config {
     pub teams: Vec<Team>,
 }
 
-/// The target repository. Without it, the target is taken from --repo or the git remote.
+/// The target repository. --repo takes precedence over it, and without either, the target is
+/// taken from the git remote.
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Meta {
@@ -422,8 +423,15 @@ pub struct RequiredReviewer {
     pub reviewer: ReviewActor,
 }
 
+impl RequiredReviewer {
+    /// Keys as written in TOML and the API. import uses them to tell what ghrs knows from what
+    /// GitHub added later
+    pub const KEYS: &[&str] = &["file_patterns", "minimum_approvals", "reviewer"];
+}
+
 optional_table! {
-    /// Organization-owned repositories only
+    /// Organization-owned repositories only. `enabled` is required unless the ruleset already has
+    /// a restriction, whose keys not written here keep their current values
     #[schemars(extend("x-github-source" = rest_api_schema(
         "repository-rule-params-dismissal-restriction"
     )))]
@@ -492,7 +500,7 @@ optional_table! {
 }
 
 /// `repository_id` is a numeric ID, which ghrs cannot resolve from a name yet, so validation
-/// rejects it and this rule cannot be declared.
+/// rejects it: a workflow file cannot be declared. `workflows = true` keeps the current ones.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(extend("x-github-source" = rest_api_schema(
@@ -505,6 +513,12 @@ pub struct WorkflowFile {
     pub repository_id: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha: Option<String>,
+}
+
+impl WorkflowFile {
+    /// Keys as written in TOML and the API. import uses them to tell what ghrs knows from what
+    /// GitHub added later
+    pub const KEYS: &[&str] = &["path", "ref", "repository_id", "sha"];
 }
 
 optional_table! {
@@ -524,6 +538,12 @@ pub struct CodeScanningTool {
     #[schemars(extend("enum" = schema::SECURITY_ALERTS_THRESHOLDS))]
     pub security_alerts_threshold: String,
     pub tool: String,
+}
+
+impl CodeScanningTool {
+    /// Keys as written in TOML and the API. import uses them to tell what ghrs knows from what
+    /// GitHub added later
+    pub const KEYS: &[&str] = &["alerts_threshold", "security_alerts_threshold", "tool"];
 }
 
 optional_table! {
@@ -690,6 +710,52 @@ mod keyed {
 mod tests {
     use super::*;
     use crate::schema::PARAMETERIZED_RULES;
+
+    /// The keys import keeps in nested tables are the ones the types serialize
+    #[test]
+    fn nested_keys_match_fields() {
+        let keys = |v: serde_json::Value| -> Vec<String> {
+            let mut keys: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        let sorted = |k: &[&str]| -> Vec<String> {
+            let mut k: Vec<String> = k.iter().map(|s| s.to_string()).collect();
+            k.sort();
+            k
+        };
+        let reviewer = RequiredReviewer {
+            file_patterns: vec![],
+            minimum_approvals: 0,
+            reviewer: ReviewActor {
+                actor_type: String::new(),
+                name: String::new(),
+            },
+        };
+        let tool = CodeScanningTool {
+            alerts_threshold: String::new(),
+            security_alerts_threshold: String::new(),
+            tool: String::new(),
+        };
+        let workflow = WorkflowFile {
+            path: String::new(),
+            git_ref: Some(String::new()),
+            repository_id: 0,
+            sha: Some(String::new()),
+        };
+        assert_eq!(
+            keys(serde_json::to_value(&reviewer).unwrap()),
+            sorted(RequiredReviewer::KEYS)
+        );
+        assert_eq!(
+            keys(serde_json::to_value(&tool).unwrap()),
+            sorted(CodeScanningTool::KEYS)
+        );
+        assert_eq!(
+            keys(serde_json::to_value(&workflow).unwrap()),
+            sorted(WorkflowFile::KEYS)
+        );
+    }
 
     /// Checks `value` against the subset of JSON Schema that [`json_schema`] produces, and
     /// collects the paths that do not match.

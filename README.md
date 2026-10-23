@@ -71,6 +71,7 @@ Common options for `plan` and `apply`:
 
 `apply` additionally takes `--yes` to skip the confirmation prompt, and `--no-fail-fast` to continue with independent steps after an error.
 When a change weakens protection, `apply` asks you to type the repository name instead of `yes`.
+For an existing ruleset, that covers deleting it, disabling it, changing its target, narrowing its conditions, removing a rule, widening bypass actors, and relaxing parameters such as lowering the required approvals or removing a required status check.
 Without a terminal, `apply` refuses to proceed unless `--yes` is given.
 
 `drift --exit-code` exits with status 2 when there is a difference, which is useful for scheduled checks in CI.
@@ -148,10 +149,12 @@ When running as a GitHub App, `integration = "self"` refers to that App.
 
 Rule parameters not written in a rule's table keep their current values.
 Rules and parameters that ghrs does not know yet (for example, ones GitHub added recently) cannot be declared; `import` leaves them out with a warning, and `plan` keeps them at their current values instead of removing them.
+The exception is a parameter inside an element of an array (for example, an entry of `required_reviewers`): the element is sent as a whole, so `plan` shows its removal.
 
 Unknown keys are rejected, including rule names and rule parameters, so a misspelled key fails instead of being silently ignored.
 The error names the key's path and suggests the closest allowed key.
 The declaration is validated before any API call, and settings that GitHub would reject with an unexplained 422 (for example, organization-only rules in a personal repository) are reported up front.
+A new rule missing a required parameter (for example, `merge_queue = true`) is reported the same way once the current rulesets are read, before any change is made.
 With `--json`, these errors are written to standard output as structured diagnostics with a code, a path, and a suggested fix.
 
 Rulesets inherited from the organization are not managed.
@@ -163,11 +166,11 @@ Credentials are resolved in the following order.
 
 1. `--app-id` with `--private-key`, or `--token`
 2. `GHRS_APP_ID` with `GHRS_PRIVATE_KEY` (PEM or base64 PEM) or `GHRS_PRIVATE_KEY_PATH`
-3. `~/.config/ghrs/config.toml`
+3. `$XDG_CONFIG_HOME/ghrs/config.toml` (`~/.config/ghrs/config.toml` when `XDG_CONFIG_HOME` is not set)
 4. `GITHUB_TOKEN`
 5. `gh auth token`
 
-`~/.config/ghrs/config.toml` holds either an App or a token, not both.
+The config file holds either an App or a token, not both.
 
 ```toml
 [app]
@@ -180,6 +183,7 @@ token = "op://Private/GitHub/token"
 ```
 
 A GitHub App needs the Repository → Administration: Read and write permission and must be installed on the target repository.
+Resolving team names also needs Organization → Members: Read (for a token, membership in the Organization).
 Private keys and tokens also accept a 1Password secret reference (`op://vault/item/field`), which is read with `op read`.
 
 ## Development

@@ -141,16 +141,17 @@ pub struct Summary {
     pub destroy: usize,
 }
 
-/// Targets narrowed by `--only`. Kinds outside the scope trigger no API calls at all.
-struct Scope {
-    repository: bool,
-    rulesets: bool,
-    collaborators: bool,
-    teams: bool,
+/// Targets narrowed by `--only`. Kinds outside the scope trigger no API calls at all, and their
+/// declarations are not validated against the repository.
+pub struct Scope {
+    pub repository: bool,
+    pub rulesets: bool,
+    pub collaborators: bool,
+    pub teams: bool,
 }
 
 impl Scope {
-    fn new(only: &[Resource]) -> Self {
+    pub fn new(only: &[Resource]) -> Self {
         let wants = |r: fn(&Resource) -> bool| only.is_empty() || only.iter().any(r);
         Self {
             repository: wants(|r| matches!(r, Resource::Repository)),
@@ -177,13 +178,7 @@ pub async fn run(
     let repo = gh.get(&format!("/repos/{target}")).await?;
     let owned_by_org = repo["owner"]["type"] == "Organization";
     let visibility = repo["visibility"].as_str().unwrap_or_default();
-    let errors = validate::check_context(
-        config,
-        &target.owner,
-        owned_by_org,
-        visibility,
-        scope.rulesets,
-    );
+    let errors = validate::check_context(config, &target.owner, owned_by_org, visibility, &scope);
     if !errors.is_empty() {
         return Err(Diagnostics::new(errors).into());
     }
@@ -239,9 +234,20 @@ pub async fn run(
         resolve::declared(gh, target, config, &mut dir).await?;
 
         let mut desired = Vec::new();
+        let mut errors = Vec::new();
         for decl in &config.rulesets {
             let have = current.iter().find(|c| c.name == decl.name);
-            desired.push(state::desired(decl, have, &dir)?);
+            match state::desired(decl, have, &dir) {
+                Ok(state) => desired.push(state),
+                // Report the declaration errors of every ruleset at once
+                Err(err) => match err.downcast::<Diagnostics>() {
+                    Ok(d) => errors.extend(d.diagnostics),
+                    Err(err) => return Err(err),
+                },
+            }
+        }
+        if !errors.is_empty() {
+            return Err(Diagnostics::new(errors).into());
         }
 
         resolve::labels(gh, target, &current, &mut dir).await?;

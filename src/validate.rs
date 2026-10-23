@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 use crate::diagnostic::{Applicability, Code, Diagnostic, Diagnostics, Edit};
 use crate::model::{BypassActor, Config, ReviewActor, Rule, Ruleset};
+use crate::plan::Scope;
 use crate::schema::{
     ACTORS_WITHOUT_ID, BRANCH_ONLY_RULES, BYPASS_MODES, ENFORCEMENTS, MAX_RULESETS, ORG_ONLY_RULES,
     PERMISSIONS, PUSH_RULES, REPOSITORY_ROLES, ROLES_WITHOUT_WRITE, TAG_ONLY_RULES, TARGETS,
@@ -18,7 +19,7 @@ fn allowed(values: &[&str]) -> String {
 
 /// Path of a keyed entry such as `ruleset.main`. A key that is not a bare TOML key is quoted
 /// (`ruleset."release/*"`).
-fn entry_path(table: &str, key: &str) -> String {
+pub fn entry_path(table: &str, key: &str) -> String {
     let bare = !key.is_empty()
         && key
             .bytes()
@@ -49,7 +50,18 @@ pub fn parse(text: &str) -> Result<Config, Diagnostics> {
 }
 
 fn deserialize_error(err: serde_path_to_error::Error<toml::de::Error>, text: &str) -> Diagnostic {
+    use serde_path_to_error::Segment;
     let path = key_path(err.path());
+    // Taken from the segments rather than the rendered path, where a quoted key may hold a `.`
+    let keys: Vec<String> = err
+        .path()
+        .iter()
+        .map(|segment| match segment {
+            Segment::Map { key } | Segment::Enum { variant: key } => key.clone(),
+            _ => String::new(),
+        })
+        .collect();
+    let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
     let err = err.into_inner();
     let message = err.message();
     let Some(expected) = message.strip_prefix("unknown field `").map(expected_keys) else {
@@ -60,11 +72,10 @@ fn deserialize_error(err: serde_path_to_error::Error<toml::de::Error>, text: &st
         };
     };
     let path = path.unwrap_or_default();
-    let (parent, key) = match path.rsplit_once('.') {
-        Some((parent, key)) => (parent, key),
-        None => ("", path.as_str()),
-    };
-    if parent.ends_with(".rules") && PUSH_RULES.contains(&key) {
+    let key = keys.last().copied().unwrap_or_default();
+    if let ["ruleset", _, "rules", key] = keys[..]
+        && PUSH_RULES.contains(&key)
+    {
         return Diagnostic::error(
             Code::PushRule,
             format!("{key} is a push ruleset rule and cannot be used in branch or tag rulesets"),
@@ -171,6 +182,22 @@ fn distance(a: &str, b: &str) -> usize {
 pub fn check(config: &Config, app_auth: bool) -> Vec<Diagnostic> {
     let mut errors = Vec::new();
 
+    // Each is one segment of the API route (`/repos/{owner}/{repo}`)
+    for (key, value) in [("owner", &config.meta.owner), ("repo", &config.meta.repo)] {
+        if let Some(value) = value
+            && (value.is_empty() || value.contains(['/', ' ', '?', '#']))
+        {
+            errors.push(
+                Diagnostic::error(
+                    Code::InvalidMeta,
+                    format!("meta.{key} \"{value}\" is not a valid {key} name"),
+                )
+                .at(format!("meta.{key}"))
+                .help("write the owner and the repository name separately, as in owner/repo"),
+            );
+        }
+    }
+
     if let Some(visibility) = &config.repository.visibility
         && !VISIBILITIES.contains(&visibility.as_str())
     {
@@ -230,6 +257,9 @@ pub fn check(config: &Config, app_auth: bool) -> Vec<Diagnostic> {
     let mut slugs = HashSet::new();
     for t in &config.teams {
         let path = entry_path("team", &t.slug);
+        if t.slug.is_empty() {
+            errors.push(Diagnostic::error(Code::EmptySlug, "team slug is empty").at(&path));
+        }
         if !slugs.insert(t.slug.to_ascii_lowercase()) {
             errors.push(
                 Diagnostic::error(
@@ -272,11 +302,16 @@ pub fn check_context(
     owner: &str,
     owned_by_org: bool,
     current_visibility: &str,
-    rulesets_in_scope: bool,
+    scope: &Scope,
 ) -> Vec<Diagnostic> {
     let mut errors = Vec::new();
 
-    for c in &config.collaborators {
+    let collaborators = if scope.collaborators {
+        &config.collaborators[..]
+    } else {
+        &[]
+    };
+    for c in collaborators {
         let path = entry_path("collaborator", &c.login);
         if c.login.eq_ignore_ascii_case(owner) {
             // The owner is always admin, so removing it changes nothing on the GitHub side
@@ -319,7 +354,7 @@ pub fn check_context(
             );
         }
     }
-    if !owned_by_org && !config.teams.is_empty() {
+    if !owned_by_org && scope.teams && !config.teams.is_empty() {
         errors.push(
             Diagnostic::error(
                 Code::TeamOnPersonal,
@@ -329,7 +364,7 @@ pub fn check_context(
             .help("teams exist only in Organizations; remove the [team.*] tables"),
         );
     }
-    if !owned_by_org && rulesets_in_scope {
+    if !owned_by_org && scope.rulesets {
         for ruleset in &config.rulesets {
             let base = entry_path("ruleset", &ruleset.name);
             for (rule, value) in &ruleset.rules.entries() {
@@ -352,7 +387,7 @@ pub fn check_context(
         }
     }
 
-    if !owned_by_org {
+    if !owned_by_org && scope.rulesets {
         for ruleset in &config.rulesets {
             let base = entry_path("ruleset", &ruleset.name);
             for (j, actor) in ruleset.bypass_actors.iter().enumerate() {
@@ -420,19 +455,21 @@ pub fn check_context(
         }
     }
 
-    // Rulesets are unavailable for private repositories on the free plan
-    let visibility = config
+    // Rulesets are unavailable for private repositories on the free plan. A declared visibility
+    // is applied only with the repository in scope
+    let declared_visibility = config
         .repository
         .visibility
         .as_deref()
-        .unwrap_or(current_visibility);
-    if rulesets_in_scope && visibility == "private" && !config.rulesets.is_empty() {
+        .filter(|_| scope.repository);
+    let visibility = declared_visibility.unwrap_or(current_visibility);
+    if scope.rulesets && visibility == "private" && !config.rulesets.is_empty() {
         let mut d = Diagnostic::error(
             Code::RulesetsOnPrivate,
             "rulesets are not available on private repositories (free plan limitation)",
         )
         .help("set repository.visibility to \"public\" or remove the rulesets");
-        if config.repository.visibility.is_some() {
+        if declared_visibility.is_some() {
             d = d.at("repository.visibility");
         }
         errors.push(d);
@@ -685,6 +722,11 @@ fn check_actor(
         )
         .at(path)
         .help("add name = \"...\""),
+        (_, Some(value)) if value.trim().is_empty() => Diagnostic::error(
+            Code::EmptyActorName,
+            format!("{at}: {kind} bypass actor has an empty name"),
+        )
+        .at(&name),
         ("integration", Some("self")) if !app_auth => Diagnostic::error(
             Code::SelfNeedsApp,
             format!(
@@ -751,6 +793,14 @@ fn check_review_actor(
             .at(format!("{full}.type"))
             .help(allowed(kinds)),
         );
+    } else if name.trim().is_empty() {
+        errors.push(
+            Diagnostic::error(
+                Code::EmptyActorName,
+                format!("{at}: name in {path} is empty"),
+            )
+            .at(format!("{full}.name")),
+        );
     } else if is_numeric(name) {
         errors.push(
             Diagnostic::error(
@@ -813,6 +863,25 @@ fn is_numeric(s: &str) -> bool {
 mod tests {
     use super::*;
     use crate::diagnostic::Fix;
+
+    const ALL: Scope = Scope {
+        repository: true,
+        rulesets: true,
+        collaborators: true,
+        teams: true,
+    };
+    const ACCESS: Scope = Scope {
+        repository: false,
+        rulesets: false,
+        collaborators: true,
+        teams: true,
+    };
+    const REPOSITORY: Scope = Scope {
+        repository: true,
+        rulesets: false,
+        collaborators: false,
+        teams: false,
+    };
 
     fn errors(toml: &str) -> Vec<Diagnostic> {
         let config: Config = toml::from_str(toml).unwrap();
@@ -1084,10 +1153,10 @@ name = "owner"
         let toml = ruleset("[[ruleset.r.bypass_actors]]\ntype = \"team\"\nname = \"maintainers\"");
         let config: Config = toml::from_str(&toml).unwrap();
         assert_eq!(
-            check_context(&config, "takumin", false, "public", true).len(),
+            check_context(&config, "takumin", false, "public", &ALL).len(),
             1
         );
-        assert!(check_context(&config, "takumin", true, "public", true).is_empty());
+        assert!(check_context(&config, "takumin", true, "public", &ALL).is_empty());
     }
 
     #[test]
@@ -1095,10 +1164,47 @@ name = "owner"
         let toml = ruleset("[[ruleset.r.bypass_actors]]\ntype = \"organization_admin\"");
         let config: Config = toml::from_str(&toml).unwrap();
         assert_eq!(
-            check_context(&config, "takumin", false, "public", true).len(),
+            check_context(&config, "takumin", false, "public", &ALL).len(),
             1
         );
-        assert!(check_context(&config, "takumin", true, "public", true).is_empty());
+        assert!(check_context(&config, "takumin", true, "public", &ALL).is_empty());
+    }
+
+    #[test]
+    fn rejects_empty_names() {
+        let codes = |toml: &str| -> Vec<Code> {
+            let config: Config = toml::from_str(toml).unwrap();
+            check(&config, false).iter().map(|d| d.code).collect()
+        };
+        assert_eq!(
+            codes("[team.\"\"]\npermission = \"push\""),
+            [Code::EmptySlug]
+        );
+        assert_eq!(
+            codes(&ruleset(
+                "[[ruleset.r.bypass_actors]]\ntype = \"team\"\nname = \"\""
+            )),
+            [Code::EmptyActorName]
+        );
+        assert_eq!(
+            codes(&ruleset(
+                "[ruleset.r.rules.pull_request.dismissal_restriction]\nenabled = true\n\
+                allowed_actors = [{ type = \"team\", name = \" \" }]"
+            )),
+            [Code::EmptyActorName]
+        );
+    }
+
+    #[test]
+    fn rejects_meta_that_is_not_one_segment() {
+        let config: Config = toml::from_str("[meta]\nowner = \"takumin\"\nrepo = \"a/b\"").unwrap();
+        let errors = check(&config, false);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code, Code::InvalidMeta);
+        assert_eq!(errors[0].path.as_deref(), Some("meta.repo"));
+        let config: Config =
+            toml::from_str("[meta]\nowner = \"takumin\"\nrepo = \"ghrs\"").unwrap();
+        assert!(check(&config, false).is_empty());
     }
 
     #[test]
@@ -1130,12 +1236,12 @@ permission = "maintain"
         let config: Config = toml::from_str(toml).unwrap();
         // Owner declaration, non-push on a personal repository, team on a personal repository
         assert_eq!(
-            check_context(&config, "takumin", false, "public", false).len(),
+            check_context(&config, "takumin", false, "public", &ACCESS).len(),
             3
         );
         // For an Organization, only the owner declaration remains
         assert_eq!(
-            check_context(&config, "takumin", true, "public", false).len(),
+            check_context(&config, "takumin", true, "public", &ACCESS).len(),
             1
         );
     }
@@ -1145,10 +1251,25 @@ permission = "maintain"
         let toml = ruleset("[ruleset.r.rules]\nmerge_queue = true\nbranch_name_pattern = false");
         let config: Config = toml::from_str(&toml).unwrap();
         assert_eq!(
-            check_context(&config, "takumin", false, "public", true).len(),
+            check_context(&config, "takumin", false, "public", &ALL).len(),
             1
         );
-        assert!(check_context(&config, "takumin", true, "public", true).is_empty());
+        assert!(check_context(&config, "takumin", true, "public", &ALL).is_empty());
+    }
+
+    /// The key is told apart from the path even when it is quoted and holds a `.`
+    #[test]
+    fn names_quoted_unknown_keys() {
+        let d = parse_error("[repository]\n\"has.wiki\" = true");
+        assert_eq!(d.code, Code::UnknownKey);
+        assert_eq!(d.message, "unknown key `has.wiki`");
+
+        // A ruleset named "rules" is not a rules table
+        let d = parse_error(&format!(
+            "{}\nmax_file_size = 1",
+            ruleset("").replace("[ruleset.r]", "[ruleset.rules]")
+        ));
+        assert_eq!(d.code, Code::UnknownKey, "{d:?}");
     }
 
     #[test]
@@ -1236,10 +1357,10 @@ permission = "maintain"
 
         let config: Config = toml::from_str(&ok).unwrap();
         assert_eq!(
-            check_context(&config, "takumin", false, "public", true).len(),
+            check_context(&config, "takumin", false, "public", &ALL).len(),
             2
         );
-        assert!(check_context(&config, "takumin", true, "public", true).is_empty());
+        assert!(check_context(&config, "takumin", true, "public", &ALL).is_empty());
     }
 
     #[test]
@@ -1266,21 +1387,50 @@ permission = "maintain"
         assert_eq!(errors_of(&reviewer), [Code::ReviewActorTypeNotAllowed]);
     }
 
+    /// Declarations outside `--only` are neither applied nor checked against the repository
+    #[test]
+    fn checks_only_what_is_in_scope() {
+        let toml = format!(
+            "[repository]\nvisibility = \"public\"\n\n\
+                [collaborator.bob]\npermission = \"admin\"\n\n\
+                [team.maintainers]\npermission = \"maintain\"\n\n{}",
+            ruleset("[[ruleset.r.bypass_actors]]\ntype = \"organization_admin\"")
+        );
+        let config: Config = toml::from_str(&toml).unwrap();
+        assert!(check_context(&config, "takumin", false, "public", &REPOSITORY).is_empty());
+
+        // The declared visibility is not applied, so the current one decides
+        let rulesets = Scope {
+            repository: false,
+            rulesets: true,
+            collaborators: false,
+            teams: false,
+        };
+        let codes: Vec<Code> = check_context(&config, "takumin", false, "private", &rulesets)
+            .iter()
+            .map(|d| d.code)
+            .collect();
+        assert_eq!(
+            codes,
+            [Code::OrganizationAdminOnPersonal, Code::RulesetsOnPrivate]
+        );
+    }
+
     #[test]
     fn rejects_rulesets_on_private_repository() {
         let config: Config = toml::from_str(&ruleset("")).unwrap();
         assert_eq!(
-            check_context(&config, "takumin", false, "private", true).len(),
+            check_context(&config, "takumin", false, "private", &ALL).len(),
             1
         );
-        assert!(check_context(&config, "takumin", false, "private", false).is_empty());
+        assert!(check_context(&config, "takumin", false, "private", &REPOSITORY).is_empty());
 
         let public: Config = toml::from_str(&format!(
             "[repository]\nvisibility = \"public\"\n{}",
             ruleset("")
         ))
         .unwrap();
-        assert!(check_context(&public, "takumin", false, "private", true).is_empty());
+        assert!(check_context(&public, "takumin", false, "private", &ALL).is_empty());
     }
 
     #[test]
@@ -1290,7 +1440,7 @@ permission = "maintain"
             [[ruleset.r.bypass_actors]]\ntype = \"organization_admin\"",
         );
         let config: Config = toml::from_str(&toml).unwrap();
-        let errors = check_context(&config, "takumin", false, "public", true);
+        let errors = check_context(&config, "takumin", false, "public", &ALL);
         assert_eq!(errors.len(), 1);
         let d = &errors[0];
         assert_eq!(d.code, Code::OrganizationAdminOnPersonal);

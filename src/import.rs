@@ -1,7 +1,7 @@
 //! Read the current state from the GitHub API and convert it into the `.ghrs.toml` model.
 
 use anyhow::{Context, Result, bail};
-use serde_json::{Map, Value as Json, json};
+use serde_json::{Map, Value as Json};
 use std::collections::HashMap;
 
 use crate::access;
@@ -9,7 +9,8 @@ use crate::auth::SelfApp;
 use crate::diagnostic::Diagnostics;
 use crate::github::GitHub;
 use crate::model::{
-    BypassActor, Collaborator, Conditions, Config, Meta, Repository, Rules, Ruleset, Team,
+    BypassActor, CodeScanningTool, Collaborator, Conditions, Config, DismissalRestriction, Meta,
+    Repository, RequiredReviewer, Rules, Ruleset, Team, WorkflowFile,
 };
 use crate::repo::RepoRef;
 use crate::resolve;
@@ -19,7 +20,8 @@ use crate::validate;
 pub struct Importer {
     pub gh: GitHub,
     app_names: HashMap<u64, String>,
-    /// For an Organization-owned repository, that Organization's team ID -> slug
+    /// For an Organization-owned repository, that Organization's team ID -> slug. Listed on first
+    /// use, since listing teams needs Organization membership
     team_names: Option<HashMap<u64, String>>,
     /// The owner, when it is an Organization
     org: Option<String>,
@@ -58,7 +60,6 @@ impl Importer {
     pub async fn run(&mut self, owner: &str, repo: &str) -> Result<Config> {
         let (repository, owned_by_org) = self.repository(owner, repo).await?;
         if owned_by_org {
-            self.team_names = Some(self.org_teams(owner).await?);
             self.org = Some(owner.to_string());
         }
         let rulesets = self.rulesets(owner, repo).await?;
@@ -219,7 +220,8 @@ impl Importer {
                     None => {
                         self.warn(format!(
                             "ruleset \"{ruleset}\": observed unknown repository role ID {id}; \
-                            review the table of built-in roles"
+                            wrote the numeric ID, which plan rejects until it is replaced with \
+                            the role name (review the table of built-in roles)"
                         ));
                         id.to_string()
                     }
@@ -228,19 +230,21 @@ impl Importer {
             }
             "Integration" => {
                 let id = actor_id.context("Integration has no actor_id")?;
-                let name = self.app_slug(id, &format!("ruleset \"{ruleset}\"")).await;
+                let name = self.app_slug(id, &format!("ruleset \"{ruleset}\"")).await?;
                 ("integration", Some(name))
             }
             "OrganizationAdmin" => ("organization_admin", None),
             "Team" => {
                 let id = actor_id.context("Team has no actor_id")?;
-                let slug = self.team_names.as_ref().and_then(|t| t.get(&id)).cloned();
+                let slug = self.team_slug(id).await;
                 let name = match slug {
                     Some(slug) => slug,
                     None => {
                         self.warn(format!(
-                            "ruleset \"{ruleset}\": cannot resolve team ID {id} to a name; wrote \
-                            the numeric ID instead"
+                            "ruleset \"{ruleset}\": cannot resolve team ID {id} to a name (listing \
+                            teams needs Organization membership); wrote \
+                            the numeric ID, which plan rejects until it is replaced with the \
+                            team slug"
                         ));
                         id.to_string()
                     }
@@ -274,26 +278,34 @@ impl Importer {
         self.installation_names.get(&id).cloned()
     }
 
-    async fn org_teams(&mut self, org: &str) -> Result<HashMap<u64, String>> {
-        let list = self.gh.get_all(&format!("/orgs/{org}/teams")).await?;
-        Ok(list
-            .iter()
-            .filter_map(|t| Some((t["id"].as_u64()?, t["slug"].as_str()?.to_string())))
-            .collect())
+    /// On failure the ID is left numeric, like an installation.
+    async fn team_slug(&mut self, id: u64) -> Option<String> {
+        if self.team_names.is_none() {
+            let org = self.org.clone()?;
+            let list = self.gh.get_all(&format!("/orgs/{org}/teams")).await;
+            self.team_names = Some(
+                list.unwrap_or_default()
+                    .iter()
+                    .filter_map(|t| Some((t["id"].as_u64()?, t["slug"].as_str()?.to_string())))
+                    .collect(),
+            );
+        }
+        self.team_names.as_ref()?.get(&id).cloned()
     }
 
     /// `GET /app/{id}` returns public Apps and private Apps owned by the token's owner.
     /// Someone else's private App returns 404, and there is no way to map the ID to a name
     /// (`/user/installations` requires the App's user-to-server token, and
     /// `/orgs/{org}/installations` does not exist for personal accounts). When it cannot be
-    /// resolved, output the numeric ID as-is and warn.
-    async fn app_slug(&mut self, id: u64, context: &str) -> String {
+    /// resolved, output the numeric ID as-is and warn. Other errors (rate limits, network) are
+    /// not a private App, so they stop the import instead of writing an ID.
+    async fn app_slug(&mut self, id: u64, context: &str) -> Result<String> {
         if let Some(slug) = self.app_names.get(&id) {
-            return slug.clone();
+            return Ok(slug.clone());
         }
-        let slug = match self.get(format!("/app/{id}")).await {
-            Ok(v) => string_or_empty(&v["slug"]),
-            Err(_) => {
+        let slug = match self.gh.get_optional(&format!("/app/{id}")).await? {
+            Some(v) => string_or_empty(&v["slug"]),
+            None => {
                 self.warn(format!(
                     "{context}: cannot resolve App ID {id} to a name (probably a private App); \
                     wrote the numeric ID instead"
@@ -302,7 +314,7 @@ impl Importer {
             }
         };
         self.app_names.insert(id, slug.clone());
-        slug
+        Ok(slug)
     }
 
     /// Fold the rule array into a table.
@@ -326,14 +338,15 @@ impl Importer {
 
             let value = match (rule_type.as_str(), params) {
                 (_, None) => Json::Bool(true),
-                // `update = true` is sugar for update_allows_fetch_and_merge = false.
+                // update_allows_fetch_and_merge = false is the default, so `true` declares it.
+                // Any other parameters are kept, since `true` keeps the current ones.
                 ("update", Some(params))
                     if params["update_allows_fetch_and_merge"] == Json::Bool(false) =>
                 {
                     Json::Bool(true)
                 }
                 ("required_status_checks", Some(params)) => {
-                    self.status_checks(ruleset, params).await
+                    self.status_checks(ruleset, params).await?
                 }
                 ("pull_request", Some(params)) => {
                     let params = self.named_review_actors(ruleset, params).await;
@@ -363,7 +376,7 @@ impl Importer {
         let mut names = HashMap::new();
         for (kind, id) in ids {
             let name = match kind.as_str() {
-                "Team" => self.team_names.as_ref().and_then(|t| t.get(&id)).cloned(),
+                "Team" => self.team_slug(id).await,
                 "RepositoryRole" => role_name(id).map(str::to_string),
                 "IntegrationInstallation" => self.installation_slug(id).await,
                 "User" => match self.get(format!("/user/{id}")).await {
@@ -375,7 +388,8 @@ impl Importer {
             let name = name.unwrap_or_else(|| {
                 self.warn(format!(
                     "ruleset \"{ruleset}\": cannot resolve {kind} ID {id} in pull_request to a \
-                    name; wrote the numeric ID instead"
+                    name; wrote the numeric ID, which plan rejects until it is replaced with the \
+                    name"
                 ));
                 id.to_string()
             });
@@ -393,29 +407,47 @@ impl Importer {
         params
     }
 
-    async fn status_checks(&mut self, ruleset: &str, params: &Json) -> Json {
+    async fn status_checks(&mut self, ruleset: &str, params: &Json) -> Result<Json> {
         let mut checks = Vec::new();
         for check in params["required_status_checks"]
             .as_array()
             .cloned()
             .unwrap_or_default()
         {
+            for key in check.as_object().into_iter().flatten().map(|(k, _)| k) {
+                if key != "context" && key != "integration_id" {
+                    self.warn(unsupported_param(
+                        ruleset,
+                        "required_status_checks",
+                        &format!("required_status_checks[].{key}"),
+                    ));
+                }
+            }
             let mut entry = Map::new();
             entry.insert("context".to_string(), check["context"].clone());
             if let Some(id) = check["integration_id"].as_u64() {
                 let name = self
                     .app_slug(id, &format!("ruleset \"{ruleset}\" status check"))
-                    .await;
+                    .await?;
                 entry.insert("integration".to_string(), Json::String(name));
             }
             checks.push(Json::Object(entry));
         }
-        let flag = |key: &str| params[key].as_bool().unwrap_or(false);
-        json!({
-            "strict": flag("strict_required_status_checks_policy"),
-            "do_not_enforce_on_create": flag("do_not_enforce_on_create"),
-            "checks": checks,
-        })
+        let mut out = Map::new();
+        for (key, value) in params.as_object().into_iter().flatten() {
+            let key = match key.as_str() {
+                "strict_required_status_checks_policy" => "strict",
+                "do_not_enforce_on_create" => "do_not_enforce_on_create",
+                "required_status_checks" => continue,
+                _ => {
+                    self.warn(unsupported_param(ruleset, "required_status_checks", key));
+                    continue;
+                }
+            };
+            out.insert(key.to_string(), value.clone());
+        }
+        out.insert("checks".to_string(), Json::Array(checks));
+        Ok(Json::Object(out))
     }
 
     fn plain_params(
@@ -428,25 +460,14 @@ impl Importer {
         let obj = params.as_object().with_context(|| {
             format!("ruleset \"{ruleset}\": parameters of rule \"{rule_type}\" are not an object")
         })?;
-        let known = Rules::param_keys(rule_type).unwrap_or_default();
-
-        let mut out = Map::new();
-        for (key, value) in obj {
-            if key.ends_with("_id") || key.ends_with("_ids") {
-                bail!(
-                    "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{rule_type}\" is a \
-                    numeric ID; \
-                    it cannot be imported until name resolution for it is implemented"
-                );
-            }
-            if !known.contains(&key.as_str()) {
-                self.warn(format!(
-                    "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{rule_type}\" is not \
-                    supported; left it out of the declaration, and plan keeps it as is"
-                ));
-                continue;
-            }
-            out.insert(key.clone(), value.clone());
+        let (out, dropped) = known_params(rule_type, obj).map_err(|key| {
+            anyhow::anyhow!(
+                "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{rule_type}\" is a \
+                numeric ID; it cannot be imported until name resolution for it is implemented"
+            )
+        })?;
+        for key in dropped {
+            self.warn(unsupported_param(ruleset, rule_type, &key));
         }
 
         if rule_type == "pull_request" && target != "branch" {
@@ -455,8 +476,106 @@ impl Importer {
             ));
         }
 
-        Ok(Json::Object(out))
+        Ok(out)
     }
+}
+
+/// Known keys of the tables nested in rule parameters, by their path in the parameters (`[]`
+/// stands for an element of an array). Tables not listed are taken as they are.
+const NESTED_KEYS: &[(&str, &[&str])] = &[
+    (
+        "pull_request.dismissal_restriction",
+        DismissalRestriction::KEYS,
+    ),
+    ("pull_request.required_reviewers[]", RequiredReviewer::KEYS),
+    (
+        "code_scanning.code_scanning_tools[]",
+        CodeScanningTool::KEYS,
+    ),
+    ("workflows.workflows[]", WorkflowFile::KEYS),
+];
+
+/// The parameters of `rule` that [`Rules`] can hold, and the paths of the ones left out.
+/// A key holding a numeric ID, at any depth, is an `Err` with its path: ghrs cannot write it by
+/// name yet, and leaving it out would change it.
+fn known_params(
+    rule: &str,
+    params: &Map<String, Json>,
+) -> std::result::Result<(Json, Vec<String>), String> {
+    fn filter(
+        path: &str,
+        rel: &str,
+        value: &Json,
+        known: Option<&[&str]>,
+        dropped: &mut Vec<String>,
+    ) -> std::result::Result<Json, String> {
+        match value {
+            Json::Object(map) => {
+                let mut out = Map::new();
+                for (key, value) in map {
+                    let child = if rel.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{rel}.{key}")
+                    };
+                    if key.ends_with("_id") || key.ends_with("_ids") {
+                        return Err(child);
+                    }
+                    if known.is_some_and(|known| !known.contains(&key.as_str())) {
+                        dropped.push(child);
+                        continue;
+                    }
+                    let nested = format!("{path}.{key}");
+                    let known = NESTED_KEYS
+                        .iter()
+                        .find(|(p, _)| *p == nested)
+                        .map(|(_, k)| *k);
+                    out.insert(key.clone(), filter(&nested, &child, value, known, dropped)?);
+                }
+                Ok(Json::Object(out))
+            }
+            Json::Array(items) => {
+                let nested = format!("{path}[]");
+                let known = NESTED_KEYS
+                    .iter()
+                    .find(|(p, _)| *p == nested)
+                    .map(|(_, k)| *k);
+                let rel = format!("{rel}[]");
+                items
+                    .iter()
+                    .map(|item| filter(&nested, &rel, item, known, dropped))
+                    .collect::<std::result::Result<_, _>>()
+                    .map(Json::Array)
+            }
+            other => Ok(other.clone()),
+        }
+    }
+
+    let mut dropped = Vec::new();
+    let known = Rules::param_keys(rule).unwrap_or_default();
+    let out = filter(
+        rule,
+        "",
+        &Json::Object(params.clone()),
+        Some(known),
+        &mut dropped,
+    )?;
+    dropped.sort();
+    dropped.dedup();
+    Ok((out, dropped))
+}
+
+/// Inside an array, the element is replaced as a whole, so plan cannot keep the key.
+fn unsupported_param(ruleset: &str, rule: &str, key: &str) -> String {
+    let kept = if key.contains("[]") {
+        "plan shows its removal, since an array element is replaced as a whole"
+    } else {
+        "plan keeps it as is"
+    };
+    format!(
+        "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{rule}\" is not supported; left it \
+        out of the declaration, and {kept}"
+    )
 }
 
 /// Renders the imported declaration. Arrays of tables (`bypass_actors`, `checks`, ...) are written
@@ -504,6 +623,59 @@ fn string_array(v: &Json) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn params(v: Json) -> Map<String, Json> {
+        v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn leaves_out_unknown_nested_parameters() {
+        let (out, dropped) = known_params(
+            "pull_request",
+            &params(json!({
+                "required_approving_review_count": 1,
+                "future": true,
+                "dismissal_restriction": { "enabled": false, "new_key": true },
+                "required_reviewers": [{
+                    "file_patterns": ["*"], "minimum_approvals": 1,
+                    "reviewer": { "type": "team", "name": "a" }, "extra": 1,
+                }],
+            })),
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            json!({
+                "required_approving_review_count": 1,
+                "dismissal_restriction": { "enabled": false },
+                "required_reviewers": [{
+                    "file_patterns": ["*"], "minimum_approvals": 1,
+                    "reviewer": { "type": "team", "name": "a" },
+                }],
+            })
+        );
+        assert_eq!(
+            dropped,
+            [
+                "dismissal_restriction.new_key",
+                "future",
+                "required_reviewers[].extra"
+            ]
+        );
+        // What import writes must be readable as the model
+        let _: crate::model::PullRequest = serde_json::from_value(out).unwrap();
+    }
+
+    #[test]
+    fn rejects_nested_numeric_ids() {
+        let err = known_params(
+            "workflows",
+            &params(json!({ "workflows": [{ "path": "a.yml", "repository_id": 123 }] })),
+        )
+        .unwrap_err();
+        assert_eq!(err, "workflows[].repository_id");
+    }
 
     #[test]
     fn renders_keyed_tables_with_inline_arrays() {

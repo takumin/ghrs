@@ -17,6 +17,9 @@ pub struct Grant {
     pub permission: String,
     /// The invitation ID, if the collaborator has not accepted the invitation
     pub invitation: Option<u64>,
+    /// Whether that invitation has expired. It can no longer be accepted, so the collaborator has
+    /// to be invited again
+    pub expired: bool,
 }
 
 /// Fetches collaborators and pending invitations, excluding the repository owner.
@@ -41,6 +44,7 @@ pub async fn current_collaborators(gh: &mut GitHub, target: &RepoRef) -> Result<
             key: login.to_string(),
             permission: from_api(c["role_name"].as_str().unwrap_or_default()),
             invitation: None,
+            expired: false,
         });
     }
 
@@ -53,6 +57,7 @@ pub async fn current_collaborators(gh: &mut GitHub, target: &RepoRef) -> Result<
             key: login.to_string(),
             permission: from_api(i["permissions"].as_str().unwrap_or_default()),
             invitation: Some(id),
+            expired: i["expired"].as_bool().unwrap_or(false),
         });
     }
     Ok(out)
@@ -69,6 +74,7 @@ pub async fn current_teams(gh: &mut GitHub, target: &RepoRef) -> Result<Vec<Gran
             key: slug.to_string(),
             permission: from_api(t["permission"].as_str().unwrap_or_default()),
             invitation: None,
+            expired: false,
         });
     }
     Ok(out)
@@ -115,6 +121,24 @@ pub fn diff(kind: &'static str, declared: &[(&str, &str)], current: &[Grant], pr
 
     for (key, permission) in declared {
         let have = current.iter().find(|g| same(&g.key, key));
+        // An expired invitation is replaced with a new one
+        if let Some(g) = have
+            && g.expired
+        {
+            out.warnings.push(format!(
+                "{kind} \"{key}\": the invitation has expired; apply sends a new one"
+            ));
+            out.steps.push(revoke_step(kind, g));
+            out.steps.push(grant_step(kind, key, permission, None));
+            out.changes.push(ResourceChange {
+                kind,
+                name: Some(key.to_string()),
+                action: Action::Create,
+                fields: vec![field(Op::Add, None, permission)],
+                destructive: Vec::new(),
+            });
+            continue;
+        }
         let (action, field) = match have {
             None => (Action::Create, field(Op::Add, None, permission)),
             Some(g) if g.permission == *permission => {
@@ -215,6 +239,7 @@ mod tests {
             key: key.to_string(),
             permission: permission.to_string(),
             invitation,
+            expired: false,
         }
     }
 
@@ -283,6 +308,23 @@ mod tests {
         assert!(matches!(
             &d.steps[..],
             [Step::DeleteInvitation { id: 7, .. }]
+        ));
+    }
+
+    #[test]
+    fn expired_invitations_are_sent_again() {
+        let current = [Grant {
+            expired: true,
+            ..grant("alice", "push", Some(7))
+        }];
+        let d = diff("collaborator", &[("alice", "push")], &current, false);
+        assert_eq!(actions(&d), [(Action::Create, "alice")]);
+        assert!(matches!(
+            &d.steps[..],
+            [
+                Step::DeleteInvitation { id: 7, .. },
+                Step::GrantCollaborator { .. }
+            ]
         ));
     }
 

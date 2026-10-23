@@ -41,6 +41,7 @@ codes! {
     VisibilityNotAllowed = "E0101",
     TooManyRulesets = "E0102",
     RulesetsOnPrivate = "E0103",
+    InvalidMeta = "E0104",
     // E02xx: ruleset
     // E0201 (duplicate ruleset name) is retired: rulesets are keyed by name, so TOML itself
     // rejects a duplicate
@@ -56,6 +57,7 @@ codes! {
     NumericIdKey = "E0210",
     OrgOnlyRule = "E0213",
     DismissalRestrictionOnPersonal = "E0214",
+    MissingRequiredParams = "E0215",
     // E03xx: bypass actors and pull_request actors
     UnknownActorType = "E0301",
     BypassModeNotAllowed = "E0302",
@@ -72,6 +74,7 @@ codes! {
     // E0313 (malformed pull_request actor) is retired: parsing reports it as E0002 / E0003
     ReviewActorTypeNotAllowed = "E0314",
     DismissalRoleNotAdmin = "E0315",
+    EmptyActorName = "E0316",
     // E04xx: collaborators and teams
     EmptyLogin = "E0401",
     DuplicateCollaborator = "E0402",
@@ -80,6 +83,7 @@ codes! {
     OwnerAsCollaborator = "E0405",
     PersonalCollaboratorPermission = "E0406",
     TeamOnPersonal = "E0407",
+    EmptySlug = "E0408",
 }
 
 impl Serialize for Code {
