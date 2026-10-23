@@ -20,7 +20,8 @@ use crate::validate;
 pub struct Importer {
     pub gh: GitHub,
     app_names: HashMap<u64, String>,
-    /// For an Organization-owned repository, that Organization's team ID -> slug
+    /// For an Organization-owned repository, that Organization's team ID -> slug. Listed on first
+    /// use, since listing teams needs Organization membership
     team_names: Option<HashMap<u64, String>>,
     /// The owner, when it is an Organization
     org: Option<String>,
@@ -59,7 +60,6 @@ impl Importer {
     pub async fn run(&mut self, owner: &str, repo: &str) -> Result<Config> {
         let (repository, owned_by_org) = self.repository(owner, repo).await?;
         if owned_by_org {
-            self.team_names = Some(self.org_teams(owner).await?);
             self.org = Some(owner.to_string());
         }
         let rulesets = self.rulesets(owner, repo).await?;
@@ -236,12 +236,13 @@ impl Importer {
             "OrganizationAdmin" => ("organization_admin", None),
             "Team" => {
                 let id = actor_id.context("Team has no actor_id")?;
-                let slug = self.team_names.as_ref().and_then(|t| t.get(&id)).cloned();
+                let slug = self.team_slug(id).await;
                 let name = match slug {
                     Some(slug) => slug,
                     None => {
                         self.warn(format!(
-                            "ruleset \"{ruleset}\": cannot resolve team ID {id} to a name; wrote \
+                            "ruleset \"{ruleset}\": cannot resolve team ID {id} to a name (listing \
+                            teams needs Organization membership); wrote \
                             the numeric ID, which plan rejects until it is replaced with the \
                             team slug"
                         ));
@@ -277,12 +278,19 @@ impl Importer {
         self.installation_names.get(&id).cloned()
     }
 
-    async fn org_teams(&mut self, org: &str) -> Result<HashMap<u64, String>> {
-        let list = self.gh.get_all(&format!("/orgs/{org}/teams")).await?;
-        Ok(list
-            .iter()
-            .filter_map(|t| Some((t["id"].as_u64()?, t["slug"].as_str()?.to_string())))
-            .collect())
+    /// On failure the ID is left numeric, like an installation.
+    async fn team_slug(&mut self, id: u64) -> Option<String> {
+        if self.team_names.is_none() {
+            let org = self.org.clone()?;
+            let list = self.gh.get_all(&format!("/orgs/{org}/teams")).await;
+            self.team_names = Some(
+                list.unwrap_or_default()
+                    .iter()
+                    .filter_map(|t| Some((t["id"].as_u64()?, t["slug"].as_str()?.to_string())))
+                    .collect(),
+            );
+        }
+        self.team_names.as_ref()?.get(&id).cloned()
     }
 
     /// `GET /app/{id}` returns public Apps and private Apps owned by the token's owner.
@@ -367,7 +375,7 @@ impl Importer {
         let mut names = HashMap::new();
         for (kind, id) in ids {
             let name = match kind.as_str() {
-                "Team" => self.team_names.as_ref().and_then(|t| t.get(&id)).cloned(),
+                "Team" => self.team_slug(id).await,
                 "RepositoryRole" => role_name(id).map(str::to_string),
                 "IntegrationInstallation" => self.installation_slug(id).await,
                 "User" => match self.get(format!("/user/{id}")).await {

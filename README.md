@@ -182,6 +182,7 @@ token = "op://Private/GitHub/token"
 ```
 
 A GitHub App needs the Repository → Administration: Read and write permission and must be installed on the target repository.
+Resolving team names also needs Organization → Members: Read (for a token, membership in the Organization).
 Private keys and tokens also accept a 1Password secret reference (`op://vault/item/field`), which is read with `op read`.
 
 ## Development

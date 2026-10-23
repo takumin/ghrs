@@ -219,7 +219,7 @@ pub async fn labels(
     if installation_ids
         .iter()
         .any(|id| !dir.installation_names.contains_key(id))
-        && let Some(list) = org_installations(gh, &target.owner).await?
+        && let Ok(Some(list)) = org_installations(gh, &target.owner).await
     {
         for (id, slug) in list {
             dir.add_installation(&slug, id);
@@ -227,9 +227,11 @@ pub async fn labels(
     }
 
     // There is no standalone way to look up a slug from a team ID, so fetch the list only
-    // when there are unknown IDs
-    if team_ids.iter().any(|id| !dir.team_names.contains_key(id)) {
-        for t in gh.get_all(&format!("/orgs/{}/teams", target.owner)).await? {
+    // when there are unknown IDs. Listing teams needs Organization membership
+    if team_ids.iter().any(|id| !dir.team_names.contains_key(id))
+        && let Ok(teams) = gh.get_all(&format!("/orgs/{}/teams", target.owner)).await
+    {
+        for t in teams {
             if let (Some(id), Some(slug)) = (t["id"].as_u64(), t["slug"].as_str()) {
                 dir.add_team(slug, id);
             }
@@ -241,7 +243,7 @@ pub async fn labels(
         if dir.user_names.contains_key(&id) {
             continue;
         }
-        if let Some(v) = gh.get_optional(&format!("/user/{id}")).await?
+        if let Ok(Some(v)) = gh.get_optional(&format!("/user/{id}")).await
             && let Some(login) = v["login"].as_str()
         {
             dir.add_user(login, id);
@@ -254,7 +256,7 @@ pub async fn labels(
         if dir.app_names.contains_key(&id) {
             continue;
         }
-        if let Some(v) = gh.get_optional(&format!("/app/{id}")).await?
+        if let Ok(Some(v)) = gh.get_optional(&format!("/app/{id}")).await
             && let Some(slug) = v["slug"].as_str()
         {
             dir.app_names.insert(id, slug.to_string());
