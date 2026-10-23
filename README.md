@@ -132,8 +132,12 @@ Actors are written by name (App slug, team slug, user login, role name), and ghr
 When running as a GitHub App, `integration = "self"` refers to that App.
 
 Rule parameters not written in a rule's table keep their current values.
-Unknown keys are rejected, so a misspelled key fails instead of being silently ignored.
+Rules and parameters that ghrs does not know yet (for example, ones GitHub added recently) cannot be declared; `import` leaves them out with a warning, and `plan` keeps them at their current values instead of removing them.
+
+Unknown keys are rejected, including rule names and rule parameters, so a misspelled key fails instead of being silently ignored.
+The error names the key's path and suggests the closest allowed key.
 The declaration is validated before any API call, and settings that GitHub would reject with an unexplained 422 (for example, organization-only rules in a personal repository) are reported up front.
+With `--json`, these errors are written to standard output as structured diagnostics with a code, a path, and a suggested fix.
 
 Rulesets inherited from the organization are not managed.
 

@@ -549,6 +549,7 @@ dependencies = [
  "octocrab",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "tokio",
  "toml",
  "toml_edit",

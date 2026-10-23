@@ -6,7 +6,6 @@
 use anyhow::{Result, bail};
 use serde::Serialize;
 use serde_json::{Map, Value as Json, json};
-use toml::Value as Toml;
 
 use crate::access;
 use crate::auth::SelfApp;
@@ -14,10 +13,9 @@ use crate::cli::Resource;
 use crate::diagnostic::Diagnostics;
 use crate::diff::{self, Action, Op, ResourceChange};
 use crate::github::GitHub;
-use crate::model::Config;
+use crate::model::{Config, Rules};
 use crate::repo::RepoRef;
 use crate::resolve::{self, Directory};
-use crate::schema::PARAMETERIZED_RULES;
 use crate::state::{self, RulesetState};
 use crate::validate;
 
@@ -242,16 +240,6 @@ pub async fn run(
 
         let mut desired = Vec::new();
         for decl in &config.rulesets {
-            for (rule, value) in &decl.rules {
-                if matches!(value, Toml::Table(_)) && !PARAMETERIZED_RULES.contains(&rule.as_str())
-                {
-                    warnings.push(format!(
-                        "ruleset \"{}\": rule \"{rule}\" is an unknown rule with parameters; \
-                        passing its value through as is",
-                        decl.name
-                    ));
-                }
-            }
             let have = current.iter().find(|c| c.name == decl.name);
             desired.push(state::desired(decl, have, &dir)?);
         }
@@ -340,6 +328,14 @@ async fn current_rulesets(
                 "ruleset \"{}\": keeping unsupported condition \"{key}\" at its current value",
                 state.name
             ));
+        }
+        for rule in state.rules.keys() {
+            if !Rules::KEYS.contains(&rule.as_str()) {
+                warnings.push(format!(
+                    "ruleset \"{}\": keeping unsupported rule \"{rule}\" at its current value",
+                    state.name
+                ));
+            }
         }
         out.push(state);
     }

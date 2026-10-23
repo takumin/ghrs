@@ -8,9 +8,8 @@
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value as Json, json};
 use std::collections::BTreeMap;
-use toml::{Table, Value as Toml};
 
-use crate::model::Ruleset;
+use crate::model::{Rules, Ruleset};
 use crate::resolve::Directory;
 use crate::schema::{
     ACTORS_WITHOUT_ID, PARAMETERIZED_RULES, REQUIRED_PARAMS, actor_type_to_api,
@@ -158,6 +157,7 @@ impl RulesetState {
 ///
 /// Rules are handled as follows.
 /// - Rules absent from the declaration are disabled (same as `false`)
+/// - Rules [`Rules`] does not know cannot be declared, so they keep their current values
 /// - Parameters not written in a rule's table inherit the current value. PUT is a full
 ///   replacement, so this avoids resetting parameters the declaration does not touch to defaults
 pub fn desired(
@@ -193,7 +193,7 @@ pub fn desired(
         .collect::<Result<_>>()?;
 
     let mut rules = BTreeMap::new();
-    for (rule, value) in &decl.rules {
+    for (rule, value) in &decl.rules.entries() {
         // Newly created rules have no current value to inherit, so fill required parameters with
         // their defaults
         let current_params = current
@@ -202,17 +202,17 @@ pub fn desired(
             .flatten()
             .or_else(|| rule_defaults(rule));
         let params = match value {
-            Toml::Boolean(false) => continue,
+            Json::Bool(false) => continue,
             // `update = true` is sugar for update_allows_fetch_and_merge = false
-            Toml::Boolean(true) if rule == "update" => None,
+            Json::Bool(true) if rule == "update" => None,
             // A parameterized rule written as a boolean is treated the same as a table that
             // declares no parameters
-            Toml::Boolean(true) => current_params.or_else(|| {
+            Json::Bool(true) => current_params.or_else(|| {
                 PARAMETERIZED_RULES
                     .contains(&rule.as_str())
                     .then(|| json!({}))
             }),
-            Toml::Table(table) => {
+            Json::Object(table) => {
                 let mut merged = match current_params {
                     Some(Json::Object(map)) => map,
                     _ => Map::new(),
@@ -236,6 +236,13 @@ pub fn desired(
             }
         }
         rules.insert(rule.clone(), params);
+    }
+    if let Some(current) = current {
+        for (rule, params) in &current.rules {
+            if !Rules::KEYS.contains(&rule.as_str()) {
+                rules.insert(rule.clone(), params.clone());
+            }
+        }
     }
 
     Ok(RulesetState {
@@ -288,7 +295,7 @@ fn normalize(mut rules: BTreeMap<String, Option<Json>>) -> BTreeMap<String, Opti
 /// the TOML side uses shorter names.
 fn declared_params(
     rule: &str,
-    table: &Table,
+    table: &Map<String, Json>,
     dir: &Directory,
     at: &str,
 ) -> Result<Map<String, Json>> {
@@ -297,13 +304,13 @@ fn declared_params(
         let (key, value) = match (rule, key.as_str()) {
             ("required_status_checks", "strict") => (
                 "strict_required_status_checks_policy".to_string(),
-                toml_to_json(value)?,
+                value.clone(),
             ),
             ("required_status_checks", "checks") => (
                 "required_status_checks".to_string(),
                 status_checks(value, dir, at)?,
             ),
-            _ => (key.clone(), toml_to_json(value)?),
+            _ => (key.clone(), value.clone()),
         };
         out.insert(key, value);
     }
@@ -336,7 +343,7 @@ fn review_actor(actor: &mut Json, dir: &Directory, at: &str) -> Result<()> {
     Ok(())
 }
 
-fn status_checks(value: &Toml, dir: &Directory, at: &str) -> Result<Json> {
+fn status_checks(value: &Json, dir: &Directory, at: &str) -> Result<Json> {
     let mut checks = Vec::new();
     for check in value.as_array().into_iter().flatten() {
         let context = check
@@ -354,26 +361,6 @@ fn status_checks(value: &Toml, dir: &Directory, at: &str) -> Result<Json> {
         checks.push(Json::Object(entry));
     }
     Ok(Json::Array(checks))
-}
-
-/// Convert a TOML value to the JSON sent to the API.
-///
-/// `toml::Value`'s Serialize is not used as-is because datetimes would be output in a
-/// TOML-specific representation. Datetimes do not appear in rule parameters, so they are an error.
-fn toml_to_json(v: &Toml) -> Result<Json> {
-    Ok(match v {
-        Toml::String(s) => json!(s),
-        Toml::Integer(i) => json!(i),
-        Toml::Float(f) => json!(f),
-        Toml::Boolean(b) => json!(b),
-        Toml::Datetime(d) => bail!("datetime {d} cannot be used as a rule parameter"),
-        Toml::Array(a) => Json::Array(a.iter().map(toml_to_json).collect::<Result<_>>()?),
-        Toml::Table(t) => Json::Object(
-            t.iter()
-                .map(|(k, v)| Ok((k.clone(), toml_to_json(v)?)))
-                .collect::<Result<_>>()?,
-        ),
-    })
 }
 
 /// Tokens without admin permission do not get `bypass_actors`. The field is missing entirely
@@ -484,6 +471,18 @@ mod tests {
         .unwrap();
         assert_eq!(want.rules.keys().collect::<Vec<_>>(), ["deletion"]);
         assert_eq!(want.rules["deletion"], None);
+    }
+
+    /// A rule GitHub added after ghrs cannot be declared, so it must not be deleted either
+    #[test]
+    fn unknown_rules_keep_current_values() {
+        let cur = current(json!([
+            { "type": "deletion" },
+            { "type": "future_rule", "parameters": { "x": 1 } },
+        ]));
+        let want = desired(&decl(""), Some(&cur), &Directory::default()).unwrap();
+        assert_eq!(want.rules.keys().collect::<Vec<_>>(), ["future_rule"]);
+        assert_eq!(want.rules["future_rule"], Some(json!({ "x": 1 })));
     }
 
     #[test]
@@ -644,8 +643,8 @@ mod tests {
 
         let unresolved = desired(
             &decl(
-                "[rules.pull_request]\nrequired_reviewers = [{ reviewer = { type = \"team\", name \
-                = \"x\" } }]",
+                "[rules.pull_request]\nrequired_reviewers = [{ file_patterns = [\"*\"], \
+                minimum_approvals = 1, reviewer = { type = \"team\", name = \"x\" } }]",
             ),
             None,
             &Directory::default(),

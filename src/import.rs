@@ -1,21 +1,18 @@
 //! Read the current state from the GitHub API and convert it into the `.ghrs.toml` model.
 
 use anyhow::{Context, Result, bail};
-use serde_json::Value as Json;
+use serde_json::{Map, Value as Json, json};
 use std::collections::HashMap;
-use toml::{Table, Value as Toml};
 
 use crate::access;
 use crate::auth::SelfApp;
 use crate::diagnostic::Diagnostics;
 use crate::github::GitHub;
 use crate::model::{
-    BypassActor, Collaborator, Conditions, Config, Meta, Repository, Ruleset, Team,
+    BypassActor, Collaborator, Conditions, Config, Meta, Repository, Rules, Ruleset, Team,
 };
 use crate::repo::RepoRef;
-use crate::schema::{
-    PARAMETERIZED_RULES, for_each_review_actor, review_actor_type_to_toml, role_name,
-};
+use crate::schema::{for_each_review_actor, review_actor_type_to_toml, role_name};
 use crate::validate;
 
 pub struct Importer {
@@ -283,57 +280,44 @@ impl Importer {
 
     /// Fold the rule array into a table.
     ///
-    /// Rules without parameters become booleans; rules with parameters become tables. TOML
-    /// requires scalars to come before tables, so insert all booleans first, then the
-    /// tables.
-    async fn rules(&mut self, ruleset: &str, target: &str, v: &Json) -> Result<Table> {
-        let rules = v.as_array().cloned().unwrap_or_default();
-
-        let mut flags = Table::new();
-        let mut tables: Vec<(String, Toml)> = Vec::new();
-
-        for rule in &rules {
+    /// Rules without parameters become booleans; rules with parameters become tables.
+    ///
+    /// Rules and parameters [`Rules`] does not know are left out with a warning. plan keeps them
+    /// at their current values, so leaving them out does not change them.
+    async fn rules(&mut self, ruleset: &str, target: &str, v: &Json) -> Result<Rules> {
+        let mut out = Map::new();
+        for rule in v.as_array().into_iter().flatten() {
             let rule_type = string_or_empty(&rule["type"]);
+            if !Rules::KEYS.contains(&rule_type.as_str()) {
+                self.warn(format!(
+                    "ruleset \"{ruleset}\": rule \"{rule_type}\" is not supported; left it out \
+                    of the declaration, and plan keeps it as is"
+                ));
+                continue;
+            }
             let params = rule.get("parameters").filter(|p| !p.is_null());
 
-            let Some(params) = params else {
-                flags.insert(rule_type, Toml::Boolean(true));
-                continue;
-            };
-
-            if !PARAMETERIZED_RULES.contains(&rule_type.as_str()) {
-                self.warn(format!(
-                    "ruleset \"{ruleset}\": rule \"{rule_type}\" is an unknown rule with \
-                    parameters; \
-                    wrote its value as is"
-                ));
-            }
-
-            match rule_type.as_str() {
+            let value = match (rule_type.as_str(), params) {
+                (_, None) => Json::Bool(true),
                 // `update = true` is sugar for update_allows_fetch_and_merge = false.
-                "update" if params["update_allows_fetch_and_merge"] == Json::Bool(false) => {
-                    flags.insert(rule_type, Toml::Boolean(true));
+                ("update", Some(params))
+                    if params["update_allows_fetch_and_merge"] == Json::Bool(false) =>
+                {
+                    Json::Bool(true)
                 }
-                "required_status_checks" => {
-                    let table = self.status_checks(ruleset, params).await?;
-                    tables.push((rule_type, Toml::Table(table)));
+                ("required_status_checks", Some(params)) => {
+                    self.status_checks(ruleset, params).await
                 }
-                "pull_request" => {
+                ("pull_request", Some(params)) => {
                     let params = self.named_review_actors(ruleset, params).await;
-                    let table = self.plain_table(ruleset, &rule_type, target, &params)?;
-                    tables.push((rule_type, Toml::Table(table)));
+                    self.plain_params(ruleset, &rule_type, target, &params)?
                 }
-                _ => {
-                    let table = self.plain_table(ruleset, &rule_type, target, params)?;
-                    tables.push((rule_type, Toml::Table(table)));
-                }
-            }
+                (_, Some(params)) => self.plain_params(ruleset, &rule_type, target, params)?,
+            };
+            out.insert(rule_type, value);
         }
-
-        for (key, value) in tables {
-            flags.insert(key, value);
-        }
-        Ok(flags)
+        serde_json::from_value(Json::Object(out))
+            .with_context(|| format!("ruleset \"{ruleset}\": cannot read the rules"))
     }
 
     /// Rewrite the `{id, type}` of `pull_request` reviewers and dismissal_restrictions into the
@@ -381,60 +365,44 @@ impl Importer {
         params
     }
 
-    async fn status_checks(&mut self, ruleset: &str, params: &Json) -> Result<Table> {
-        let mut table = Table::new();
-        table.insert(
-            "strict".to_string(),
-            Toml::Boolean(
-                params["strict_required_status_checks_policy"]
-                    .as_bool()
-                    .unwrap_or(false),
-            ),
-        );
-        table.insert(
-            "do_not_enforce_on_create".to_string(),
-            Toml::Boolean(
-                params["do_not_enforce_on_create"]
-                    .as_bool()
-                    .unwrap_or(false),
-            ),
-        );
-
+    async fn status_checks(&mut self, ruleset: &str, params: &Json) -> Json {
         let mut checks = Vec::new();
         for check in params["required_status_checks"]
             .as_array()
             .cloned()
             .unwrap_or_default()
         {
-            let mut entry = Table::new();
-            entry.insert(
-                "context".to_string(),
-                Toml::String(string_or_empty(&check["context"])),
-            );
+            let mut entry = Map::new();
+            entry.insert("context".to_string(), check["context"].clone());
             if let Some(id) = check["integration_id"].as_u64() {
                 let name = self
                     .app_slug(id, &format!("ruleset \"{ruleset}\" status check"))
                     .await;
-                entry.insert("integration".to_string(), Toml::String(name));
+                entry.insert("integration".to_string(), Json::String(name));
             }
-            checks.push(Toml::Table(entry));
+            checks.push(Json::Object(entry));
         }
-        table.insert("checks".to_string(), Toml::Array(checks));
-        Ok(table)
+        let flag = |key: &str| params[key].as_bool().unwrap_or(false);
+        json!({
+            "strict": flag("strict_required_status_checks_policy"),
+            "do_not_enforce_on_create": flag("do_not_enforce_on_create"),
+            "checks": checks,
+        })
     }
 
-    fn plain_table(
+    fn plain_params(
         &mut self,
         ruleset: &str,
         rule_type: &str,
         target: &str,
         params: &Json,
-    ) -> Result<Table> {
+    ) -> Result<Json> {
         let obj = params.as_object().with_context(|| {
             format!("ruleset \"{ruleset}\": parameters of rule \"{rule_type}\" are not an object")
         })?;
+        let known = Rules::param_keys(rule_type).unwrap_or_default();
 
-        let mut table = Table::new();
+        let mut out = Map::new();
         for (key, value) in obj {
             if key.ends_with("_id") || key.ends_with("_ids") {
                 bail!(
@@ -443,7 +411,14 @@ impl Importer {
                     it cannot be imported until name resolution for it is implemented"
                 );
             }
-            table.insert(key.clone(), json_to_toml(value)?);
+            if !known.contains(&key.as_str()) {
+                self.warn(format!(
+                    "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{rule_type}\" is not \
+                    supported; left it out of the declaration, and plan keeps it as is"
+                ));
+                continue;
+            }
+            out.insert(key.clone(), value.clone());
         }
 
         if rule_type == "pull_request" && target != "branch" {
@@ -452,7 +427,7 @@ impl Importer {
             ));
         }
 
-        Ok(table)
+        Ok(Json::Object(out))
     }
 }
 
@@ -486,26 +461,6 @@ fn inline_arrays_of_tables(table: &mut toml_edit::Table) {
             _ => {}
         }
     }
-}
-
-fn json_to_toml(v: &Json) -> Result<Toml> {
-    Ok(match v {
-        Json::Null => bail!("null cannot be represented in TOML"),
-        Json::Bool(b) => Toml::Boolean(*b),
-        Json::Number(n) => match n.as_i64() {
-            Some(i) => Toml::Integer(i),
-            None => Toml::Float(n.as_f64().context("number cannot be represented")?),
-        },
-        Json::String(s) => Toml::String(s.clone()),
-        Json::Array(a) => Toml::Array(a.iter().map(json_to_toml).collect::<Result<_>>()?),
-        Json::Object(o) => {
-            let mut table = Table::new();
-            for (key, value) in o {
-                table.insert(key.clone(), json_to_toml(value)?);
-            }
-            Toml::Table(table)
-        }
-    })
 }
 
 fn string_or_empty(v: &Json) -> String {
@@ -542,7 +497,9 @@ strict = true
 checks = [{ context = "CI", integration = "github-actions" }]
 
 [ruleset.main.rules.pull_request]
-required_reviewers = [{ file_patterns = ["*"], reviewer = { type = "team", name = "t" } }]
+required_reviewers = [
+    { file_patterns = ["*"], minimum_approvals = 1, reviewer = { type = "team", name = "t" } },
+]
 
 [collaborator.octocat]
 permission = "push"
@@ -562,7 +519,8 @@ permission = "push"
         assert!(
             text.contains(
                 "required_reviewers = [\n  \
-                { file_patterns = [\"*\"], reviewer = { type = \"team\", name = \"t\" } },\n]"
+                { file_patterns = [\"*\"], minimum_approvals = 1, \
+                reviewer = { type = \"team\", name = \"t\" } },\n]"
             ),
             "{text}"
         );

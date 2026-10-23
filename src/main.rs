@@ -295,7 +295,7 @@ fn load_config(path: &Path) -> Result<Config> {
             return Err(err).with_context(|| format!("cannot read {}", path.display()));
         }
     };
-    toml::from_str(&text).with_context(|| format!("cannot parse {}", path.display()))
+    validate::parse(&text).map_err(|d| in_file(d.into(), path))
 }
 
 /// Determine the target repository in the order `--repo` -> `[meta]` -> git remote.

@@ -1,12 +1,11 @@
 //! Validation of the declaration file. Errors are collected and returned together rather
 //! than stopping at the first.
 
-use serde_json::json;
+use serde_json::{Value as Json, json};
 use std::collections::HashSet;
-use toml::Value as Toml;
 
-use crate::diagnostic::{Applicability, Code, Diagnostic, Edit};
-use crate::model::{BypassActor, Config, Ruleset};
+use crate::diagnostic::{Applicability, Code, Diagnostic, Diagnostics, Edit};
+use crate::model::{BypassActor, Config, ReviewActor, Rule, Ruleset};
 use crate::schema::{
     ACTOR_TYPES, ACTORS_WITHOUT_ID, BRANCH_ONLY_RULES, BYPASS_MODES, ENFORCEMENTS, MAX_RULESETS,
     ORG_ONLY_RULES, PERMISSIONS, PUSH_RULES, REPOSITORY_ROLES, ROLES_WITHOUT_WRITE, TAG_ONLY_RULES,
@@ -35,6 +34,134 @@ fn remove(path: &str) -> Edit {
     Edit::Remove {
         path: path.to_string(),
     }
+}
+
+/// Parse the declaration file. Unlike validation, parsing stops at the first error.
+pub fn parse(text: &str) -> Result<Config, Diagnostics> {
+    let one = |d| Diagnostics::new(vec![d]);
+    let de = toml::Deserializer::parse(text).map_err(|err| {
+        one(Diagnostic::error(
+            Code::InvalidToml,
+            with_position(err.message(), err.span(), text),
+        ))
+    })?;
+    serde_path_to_error::deserialize(de).map_err(|err| one(deserialize_error(err, text)))
+}
+
+fn deserialize_error(err: serde_path_to_error::Error<toml::de::Error>, text: &str) -> Diagnostic {
+    let path = key_path(err.path());
+    let err = err.into_inner();
+    let message = err.message();
+    let Some(expected) = message.strip_prefix("unknown field `").map(expected_keys) else {
+        let d = Diagnostic::error(Code::InvalidValue, with_position(message, err.span(), text));
+        return match path {
+            Some(path) => d.at(path),
+            None => d,
+        };
+    };
+    let path = path.unwrap_or_default();
+    let (parent, key) = match path.rsplit_once('.') {
+        Some((parent, key)) => (parent, key),
+        None => ("", path.as_str()),
+    };
+    if parent.ends_with(".rules") && PUSH_RULES.contains(&key) {
+        return Diagnostic::error(
+            Code::PushRule,
+            format!("{key} is a push ruleset rule and cannot be used in branch or tag rulesets"),
+        )
+        .at(&path)
+        .help("push rulesets are not available on the free plan")
+        .fix(Applicability::MaybeIncorrect, remove(&path));
+    }
+    let d = Diagnostic::error(Code::UnknownKey, format!("unknown key `{key}`")).at(&path);
+    match similar(key, &expected) {
+        Some(to) => d.help(format!("did you mean `{to}`?")).fix(
+            Applicability::MaybeIncorrect,
+            Edit::Rename {
+                path: path.clone(),
+                to: to.to_string(),
+            },
+        ),
+        None if expected.is_empty() => d.help("this table takes no keys"),
+        None => d.help(format!("allowed keys: {}", expected.join(" / "))),
+    }
+}
+
+/// Append the line and column of `span` to `message`.
+fn with_position(message: &str, span: Option<std::ops::Range<usize>>, text: &str) -> String {
+    let Some(span) = span else {
+        return message.to_string();
+    };
+    let before = &text[..span.start.min(text.len())];
+    let line = before.matches('\n').count() + 1;
+    let column = before[before.rfind('\n').map_or(0, |i| i + 1)..]
+        .chars()
+        .count()
+        + 1;
+    format!("{message} (line {line}, column {column})")
+}
+
+/// Render a deserialization path the way diagnostics write paths (`ruleset."release/*".rules`).
+fn key_path(path: &serde_path_to_error::Path) -> Option<String> {
+    use serde_path_to_error::Segment;
+    let mut out = String::new();
+    for segment in path.iter() {
+        match segment {
+            Segment::Map { key } if out.is_empty() => out = entry_path("", key)[1..].to_string(),
+            Segment::Map { key } => out = entry_path(&out, key),
+            Segment::Seq { index } => out.push_str(&format!("[{index}]")),
+            Segment::Enum { .. } | Segment::Unknown => {}
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// The keys listed in serde's "unknown field `x`, expected one of `a`, `b`" message. serde
+/// offers no structured access to them.
+fn expected_keys(rest: &str) -> Vec<&str> {
+    let Some((_, expected)) = rest.split_once(", expected ") else {
+        return Vec::new();
+    };
+    expected.split('`').skip(1).step_by(2).collect()
+}
+
+/// The allowed key `key` was most likely meant to be. Like rustc, accept an edit distance up to a
+/// third of the key's length, or a key that `key` is the only prefix of
+/// (`allow_rebase` -> `allow_rebase_merge`).
+fn similar<'a>(key: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    let limit = (key.len() / 3).max(1);
+    let closest = candidates
+        .iter()
+        .map(|c| (distance(key, c), *c))
+        .filter(|(d, _)| *d <= limit)
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, c)| c);
+    if closest.is_some() {
+        return closest;
+    }
+    let mut prefixed = candidates.iter().filter(|c| c.starts_with(key));
+    match (prefixed.next(), prefixed.next()) {
+        (Some(only), None) => Some(only),
+        _ => None,
+    }
+}
+
+/// Levenshtein distance.
+fn distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let next = (prev + usize::from(ca != *cb))
+                .min(row[j] + 1)
+                .min(row[j + 1] + 1);
+            prev = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[b.len()]
 }
 
 /// Validation that does not depend on GitHub state. Runs before any API call.
@@ -205,7 +332,7 @@ pub fn check_context(
     if !owned_by_org && rulesets_in_scope {
         for ruleset in &config.rulesets {
             let base = entry_path("ruleset", &ruleset.name);
-            for (rule, value) in &ruleset.rules {
+            for (rule, value) in &ruleset.rules.entries() {
                 if ORG_ONLY_RULES.contains(&rule.as_str()) && value.as_bool() != Some(false) {
                     let path = format!("{base}.rules.{rule}");
                     errors.push(
@@ -255,10 +382,10 @@ pub fn check_context(
                     );
                 }
             }
-            if let Some(Toml::Table(table)) = ruleset.rules.get("pull_request") {
+            if let Some(Rule::Params(pr)) = &ruleset.rules.pull_request {
                 // Accepted on personal repositories but not saved, so plan shows a diff every time
                 // (observed)
-                if table.contains_key("dismissal_restriction") {
+                if pr.dismissal_restriction.is_some() {
                     let path = format!("{base}.rules.pull_request.dismissal_restriction");
                     errors.push(
                         Diagnostic::error(
@@ -274,18 +401,18 @@ pub fn check_context(
                         .fix(Applicability::MachineApplicable, remove(&path)),
                     );
                 }
-                for (path, actor, _) in review_actors(table) {
-                    if actor.get("type").and_then(Toml::as_str) == Some("team") {
+                for (path, actor) in pr.review_actors() {
+                    if actor.actor_type == "team" {
                         errors.push(
                             Diagnostic::error(
                                 Code::TeamActorOnPersonal,
                                 format!(
-                                    "ruleset \"{}\": type = \"team\" in {path} is only available \
-                                    on Organization-owned repositories",
+                                    "ruleset \"{}\": type = \"team\" in rules.pull_request.{path} \
+                                    is only available on Organization-owned repositories",
                                     ruleset.name
                                 ),
                             )
-                            .at(format!("{base}.{path}")),
+                            .at(format!("{base}.rules.pull_request.{path}")),
                         );
                     }
                 }
@@ -428,9 +555,21 @@ fn check_ruleset(base: &str, ruleset: &Ruleset, app_auth: bool, errors: &mut Vec
         check_actor(&at, &path, &ruleset.target, actor, app_auth, errors);
     }
 
-    for (rule, value) in &ruleset.rules {
+    for (rule, value) in &ruleset.rules.entries() {
         let path = format!("{base}.rules.{rule}");
-        check_rule(&at, &path, rule, value, errors);
+        find_id_keys(&path, value, &mut |found| {
+            errors.push(
+                Diagnostic::error(
+                    Code::NumericIdKey,
+                    format!(
+                        "{at}: {} is keyed by numeric IDs",
+                        found.trim_start_matches(&format!("{base}."))
+                    ),
+                )
+                .at(found)
+                .help("write it in a form that uses names"),
+            );
+        });
         if value.as_bool() == Some(false) {
             continue;
         }
@@ -457,19 +596,18 @@ fn check_ruleset(base: &str, ruleset: &Ruleset, app_auth: bool, errors: &mut Vec
                 )),
             );
         }
-        if PUSH_RULES.contains(&rule.as_str()) {
-            errors.push(
-                Diagnostic::error(
-                    Code::PushRule,
-                    format!(
-                        "{at}: rules.{rule} is a push ruleset rule and cannot be used in branch or \
-                        tag rulesets"
-                    ),
-                )
-                .at(&path)
-                .help("push rulesets are not available on the free plan")
-                .fix(Applicability::MaybeIncorrect, remove(&path)),
-            );
+    }
+
+    if let Some(Rule::Params(pr)) = &ruleset.rules.pull_request {
+        for (path, actor) in pr.review_actors() {
+            // required_reviewers[].reviewer accepts only teams (observed)
+            let kinds: &[&str] = if path.starts_with("required_reviewers") {
+                &["team"]
+            } else {
+                &["team", "repository_role", "user"]
+            };
+            let path = format!("rules.pull_request.{path}");
+            check_review_actor(&at, &path, &format!("{base}.{path}"), actor, kinds, errors);
         }
     }
 }
@@ -591,136 +729,17 @@ fn roles() -> Vec<&'static str> {
     REPOSITORY_ROLES.iter().map(|(_, name)| *name).collect()
 }
 
-fn check_rule(at: &str, path: &str, rule: &str, value: &Toml, errors: &mut Vec<Diagnostic>) {
-    match value {
-        Toml::Boolean(_) => {}
-        Toml::Table(table) => {
-            find_id_keys(&format!("rules.{rule}"), value, &mut |found| {
-                errors.push(
-                    Diagnostic::error(
-                        Code::NumericIdKey,
-                        format!("{at}: {found} is keyed by numeric IDs"),
-                    )
-                    .at(format!(
-                        "{path}{}",
-                        found.trim_start_matches(&format!("rules.{rule}"))
-                    ))
-                    .help("write it in a form that uses names"),
-                );
-            });
-            if rule == "required_status_checks" {
-                check_status_checks(at, path, table.get("checks"), errors);
-            }
-            if rule == "pull_request" {
-                let base = path.trim_end_matches(".rules.pull_request");
-                for (actor_path, actor, kinds) in review_actors(table) {
-                    let full = format!("{base}.{actor_path}");
-                    check_review_actor(at, &actor_path, &full, actor, kinds, errors);
-                }
-            }
-        }
-        _ => errors.push(
-            Diagnostic::error(
-                Code::RuleShape,
-                format!("{at}: rules.{rule} must be a boolean or a table"),
-            )
-            .at(path)
-            .help(format!(
-                "write `{rule} = true` under [ruleset.rules], or a [ruleset.rules.{rule}] table of \
-                parameters"
-            )),
-        ),
-    }
-}
-
-fn check_status_checks(at: &str, path: &str, checks: Option<&Toml>, errors: &mut Vec<Diagnostic>) {
-    let Some(checks) = checks else {
-        return;
-    };
-    let Some(checks) = checks.as_array() else {
-        errors.push(
-            Diagnostic::error(
-                Code::StatusChecksNotArray,
-                format!("{at}: rules.required_status_checks.checks must be an array"),
-            )
-            .at(format!("{path}.checks")),
-        );
-        return;
-    };
-    for (i, check) in checks.iter().enumerate() {
-        let valid = check.as_table().is_some_and(|t| {
-            t.get("context").is_some_and(Toml::is_str)
-                && t.get("integration").is_none_or(Toml::is_str)
-                && t.keys().all(|k| k == "context" || k == "integration")
-        });
-        if !valid {
-            errors.push(
-                Diagnostic::error(
-                    Code::StatusCheckShape,
-                    format!(
-                        "{at}: each entry of required_status_checks.checks must have the form {{ \
-                        context = \"...\", integration = \"...\" }}"
-                    ),
-                )
-                .at(format!("{path}.checks[{i}]"))
-                .help("integration is optional"),
-            );
-        }
-    }
-}
-
-/// Actors appearing in the `pull_request` table, and the types allowed at each position.
-fn review_actors(table: &toml::Table) -> Vec<(String, &Toml, &'static [&'static str])> {
-    let mut out = Vec::new();
-    let reviewers = table.get("required_reviewers").and_then(Toml::as_array);
-    for (i, reviewer) in reviewers.into_iter().flatten().enumerate() {
-        if let Some(actor) = reviewer.get("reviewer") {
-            out.push((
-                format!("rules.pull_request.required_reviewers[{i}].reviewer"),
-                actor,
-                &["team"][..],
-            ));
-        }
-    }
-    let allowed = table
-        .get("dismissal_restriction")
-        .and_then(|d| d.get("allowed_actors"))
-        .and_then(Toml::as_array);
-    for (i, actor) in allowed.into_iter().flatten().enumerate() {
-        out.push((
-            format!("rules.pull_request.dismissal_restriction.allowed_actors[{i}]"),
-            actor,
-            &["team", "repository_role", "user"][..],
-        ));
-    }
-    out
-}
-
 /// `path` is the position within the ruleset (for messages); `full` is the position in the
 /// declaration file.
 fn check_review_actor(
     at: &str,
     path: &str,
     full: &str,
-    actor: &Toml,
+    actor: &ReviewActor,
     kinds: &[&str],
     errors: &mut Vec<Diagnostic>,
 ) {
-    let kind = actor.get("type").and_then(Toml::as_str);
-    let name = actor.get("name").and_then(Toml::as_str);
-    let shape = actor
-        .as_table()
-        .is_some_and(|t| t.keys().all(|k| k == "type" || k == "name"));
-    let (Some(kind), Some(name), true) = (kind, name, shape) else {
-        errors.push(
-            Diagnostic::error(
-                Code::ReviewActorShape,
-                format!("{at}: {path} must have the form {{ type = \"...\", name = \"...\" }}"),
-            )
-            .at(full),
-        );
-        return;
-    };
+    let (kind, name) = (actor.actor_type.as_str(), actor.name.as_str());
     if !kinds.contains(&kind) {
         errors.push(
             Diagnostic::error(
@@ -752,9 +771,9 @@ fn check_review_actor(
     }
 }
 
-fn find_id_keys(path: &str, value: &Toml, found: &mut impl FnMut(String)) {
+fn find_id_keys(path: &str, value: &Json, found: &mut impl FnMut(String)) {
     match value {
-        Toml::Table(table) => {
+        Json::Object(table) => {
             for (key, value) in table {
                 let path = format!("{path}.{key}");
                 if key == "id" || key.ends_with("_id") || key.ends_with("_ids") {
@@ -763,7 +782,7 @@ fn find_id_keys(path: &str, value: &Toml, found: &mut impl FnMut(String)) {
                 find_id_keys(&path, value, found);
             }
         }
-        Toml::Array(items) => {
+        Json::Array(items) => {
             for (i, item) in items.iter().enumerate() {
                 find_id_keys(&format!("{path}[{i}]"), item, found);
             }
@@ -818,6 +837,101 @@ checks = [{ context = "test" }, { context = "build", integration = "github-actio
     #[test]
     fn rejects_unknown_keys() {
         assert!(toml::from_str::<Config>("[repository]\nhas_issue = true").is_err());
+    }
+
+    fn parse_error(toml: &str) -> Diagnostic {
+        let mut errors = parse(toml).err().expect("parses").diagnostics;
+        assert_eq!(errors.len(), 1);
+        errors.remove(0)
+    }
+
+    fn rename(d: &Diagnostic) -> Option<(&str, &str)> {
+        match d.fix.as_ref().map(|f| &f.edit) {
+            Some(Edit::Rename { path, to }) => Some((path, to)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn suggests_the_key_that_was_meant() {
+        let d = parse_error("[repository]\nallow_rebase = false");
+        assert_eq!(d.code, Code::UnknownKey);
+        assert_eq!(
+            rename(&d),
+            Some(("repository.allow_rebase", "allow_rebase_merge"))
+        );
+
+        let d = parse_error(&ruleset("[ruleset.r.rules]\nnon_fast_foward = true"));
+        assert_eq!(
+            rename(&d),
+            Some(("ruleset.r.rules.non_fast_foward", "non_fast_forward"))
+        );
+
+        let d = parse_error(&ruleset(
+            "[ruleset.r.rules.pull_request]\nrequired_approving_review_cnt = 1",
+        ));
+        assert_eq!(
+            rename(&d),
+            Some((
+                "ruleset.r.rules.pull_request.required_approving_review_cnt",
+                "required_approving_review_count"
+            ))
+        );
+        assert_eq!(d.fix.unwrap().applicability, Applicability::MaybeIncorrect);
+    }
+
+    #[test]
+    fn lists_allowed_keys_when_nothing_is_close() {
+        let d = parse_error("[collaborator.octocat]\nrole = \"push\"");
+        assert_eq!(d.path.as_deref(), Some("collaborator.octocat.role"));
+        assert!(d.fix.is_none());
+        assert_eq!(d.help.as_deref(), Some("allowed keys: permission"));
+    }
+
+    #[test]
+    fn quotes_keys_in_paths() {
+        let toml = ruleset("foo = 1").replace("[ruleset.r]", "[ruleset.\"release/*\"]");
+        let d = parse_error(&toml);
+        assert_eq!(d.path.as_deref(), Some("ruleset.\"release/*\".foo"));
+    }
+
+    #[test]
+    fn reports_values_of_the_wrong_type() {
+        let d = parse_error(&ruleset("[ruleset.r.rules]\ndeletion = 1"));
+        assert_eq!(d.code, Code::InvalidValue);
+        assert_eq!(d.path.as_deref(), Some("ruleset.r.rules.deletion"));
+        assert!(d.message.contains("line 5"), "{}", d.message);
+
+        let d = parse_error(&ruleset("[ruleset.r.rules]\npull_request = \"yes\""));
+        assert!(
+            d.message.contains("a boolean or a table of parameters"),
+            "{}",
+            d.message
+        );
+
+        let d = parse_error("[ruleset.r]\ntarget = \"branch\"");
+        assert_eq!(d.path.as_deref(), Some("ruleset.r"));
+        assert!(d.message.contains("enforcement"), "{}", d.message);
+    }
+
+    #[test]
+    fn reports_toml_syntax_errors_with_the_line() {
+        let d = parse_error("[repository]\n[ruleset\n");
+        assert_eq!(d.code, Code::InvalidToml);
+        assert!(d.path.is_none());
+        assert!(d.message.contains("line 2"), "{}", d.message);
+    }
+
+    #[test]
+    fn similar_keys() {
+        let keys = ["has_issues", "has_wiki", "has_projects"];
+        assert_eq!(similar("has_issue", &keys), Some("has_issues"));
+        assert_eq!(similar("has_wikki", &keys), Some("has_wiki"));
+        // Ambiguous prefix
+        assert_eq!(similar("has", &keys), None);
+        assert_eq!(similar("visibility", &keys), None);
+        assert_eq!(distance("kitten", "sitting"), 3);
+        assert_eq!(distance("", "abc"), 3);
     }
 
     #[test]
@@ -994,9 +1108,16 @@ permission = "maintain"
 
     #[test]
     fn rejects_push_rules() {
-        let toml = ruleset("[ruleset.r.rules.max_file_size]\nmax_file_size = 10");
-        assert_eq!(errors(&toml).len(), 1);
-        assert!(errors(&ruleset("[ruleset.r.rules]\nmax_file_size = false")).is_empty());
+        let d = parse_error(&ruleset(
+            "[ruleset.r.rules.max_file_size]\nmax_file_size = 10",
+        ));
+        assert_eq!(d.code, Code::PushRule);
+        assert_eq!(
+            d.fix.map(|f| f.edit),
+            Some(Edit::Remove {
+                path: "ruleset.r.rules.max_file_size".to_string()
+            })
+        );
     }
 
     #[test]
@@ -1042,17 +1163,27 @@ permission = "maintain"
     fn checks_review_actors() {
         let pr = |body: &str| ruleset(&format!("[ruleset.r.rules.pull_request]\n{body}"));
         let ok = pr(
-            "required_reviewers = [{ reviewer = { type = \"team\", name = \"t\" } }]\n\
+            "required_reviewers = [{ file_patterns = [\"*\"], minimum_approvals = 1, \
+                reviewer = { type = \"team\", name = \"t\" } }]\n\
                     dismissal_restriction = { allowed_actors = [{ type = \"user\", name = \"u\" }, \
                         { type = \"repository_role\", name = \"admin\" }] }",
         );
         assert!(errors(&ok).is_empty());
 
         // The numeric ID form that import used to output
-        let raw = pr("required_reviewers = [{ reviewer = { id = 1, type = \"Team\" } }]");
-        assert_eq!(errors(&raw).len(), 2);
+        let raw = pr(
+            "required_reviewers = [{ file_patterns = [\"*\"], minimum_approvals = 1, \
+                reviewer = { id = 1, type = \"Team\" } }]",
+        );
+        let d = parse_error(&raw);
+        assert_eq!(d.code, Code::UnknownKey);
+        assert_eq!(
+            d.path.as_deref(),
+            Some("ruleset.r.rules.pull_request.required_reviewers[0].reviewer.id")
+        );
         let bad = pr(
-            "required_reviewers = [{ reviewer = { type = \"user\", name = \"u\" } }]\n\
+            "required_reviewers = [{ file_patterns = [\"*\"], minimum_approvals = 1, \
+                reviewer = { type = \"user\", name = \"u\" } }]\n\
                     dismissal_restriction = { allowed_actors = [{ type = \"team\", name = \"1\" }, \
                         { type = \"repository_role\", name = \"write\" }] }",
         );

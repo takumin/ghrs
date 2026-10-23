@@ -13,8 +13,8 @@ pub const REPOSITORY_ROLES: &[(u64, &str)] = &[(2, "maintain"), (4, "write"), (5
 /// does not have write permissions`) (observed: IDs 1 and 3; which is which is not distinguished).
 pub const ROLES_WITHOUT_WRITE: &[&str] = &["read", "triage"];
 
-/// Rules known to have parameters. Parameters on a type not listed here mean the schema missed
-/// it, so keep the values and warn.
+/// Rules known to have parameters. A rule listed here and written as `true` is sent with an
+/// empty parameter object rather than without parameters.
 ///
 /// Derived from the members of the GraphQL `RuleParameters` union. REST has no exhaustive list
 /// of rule types, so this union is the only authoritative source.

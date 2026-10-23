@@ -7,9 +7,9 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 use crate::github::GitHub;
-use crate::model::Config;
+use crate::model::{Config, Rule};
 use crate::repo::RepoRef;
-use crate::schema::{for_each_review_actor, role_name};
+use crate::schema::role_name;
 use crate::state::RulesetState;
 
 /// Mapping between names and IDs. The same table is used in both directions.
@@ -130,32 +130,21 @@ pub async fn declared(
         }
 
         // pull_request reviewers and dismissal_restriction actors
-        let mut actors = Vec::new();
-        if let Some(rule) = ruleset.rules.get("pull_request") {
-            let mut params = serde_json::to_value(rule)?;
-            let _ = for_each_review_actor(&mut params, |actor| {
-                if let (Some(kind), Some(name)) = (actor["type"].as_str(), actor["name"].as_str()) {
-                    actors.push((kind.to_string(), name.to_string()));
+        if let Some(Rule::Params(pr)) = &ruleset.rules.pull_request {
+            for (_, actor) in pr.review_actors() {
+                match actor.actor_type.as_str() {
+                    "team" => team(gh, dir, &target.owner, &actor.name, &at).await?,
+                    "user" => user(gh, dir, &actor.name, &at).await?,
+                    _ => {}
                 }
-                Ok::<(), ()>(())
-            });
-        }
-        for (kind, name) in actors {
-            match kind.as_str() {
-                "team" => team(gh, dir, &target.owner, &name, &at).await?,
-                "user" => user(gh, dir, &name, &at).await?,
-                _ => {}
             }
         }
 
-        let checks = ruleset
-            .rules
-            .get("required_status_checks")
-            .and_then(|v| v.get("checks"))
-            .and_then(|v| v.as_array());
-        for check in checks.into_iter().flatten() {
-            if let Some(name) = check.get("integration").and_then(|v| v.as_str()) {
-                app(gh, dir, name, &at, "status check integration").await?;
+        if let Some(Rule::Params(checks)) = &ruleset.rules.required_status_checks {
+            for check in checks.checks.iter().flatten() {
+                if let Some(name) = &check.integration {
+                    app(gh, dir, name, &at, "status check integration").await?;
+                }
             }
         }
     }

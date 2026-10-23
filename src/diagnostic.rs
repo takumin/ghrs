@@ -31,6 +31,10 @@ macro_rules! codes {
 }
 
 codes! {
+    // E00xx: syntax and shape of the file
+    InvalidToml = "E0001",
+    UnknownKey = "E0002",
+    InvalidValue = "E0003",
     // E01xx: repository-wide
     VisibilityNotAllowed = "E0101",
     TooManyRulesets = "E0102",
@@ -45,10 +49,9 @@ codes! {
     RefPatternPrefix = "E0206",
     RuleTargetMismatch = "E0207",
     PushRule = "E0208",
-    RuleShape = "E0209",
+    // E0209 (rule neither a boolean nor a table), E0211 (checks not an array) and E0212 (malformed
+    // status check) are retired: rules are typed, so parsing reports them as E0003
     NumericIdKey = "E0210",
-    StatusChecksNotArray = "E0211",
-    StatusCheckShape = "E0212",
     OrgOnlyRule = "E0213",
     DismissalRestrictionOnPersonal = "E0214",
     // E03xx: bypass actors and pull_request actors
@@ -64,7 +67,7 @@ codes! {
     UnknownRole = "E0310",
     TeamActorOnPersonal = "E0311",
     OrganizationAdminOnPersonal = "E0312",
-    ReviewActorShape = "E0313",
+    // E0313 (malformed pull_request actor) is retired: parsing reports it as E0002 / E0003
     ReviewActorTypeNotAllowed = "E0314",
     DismissalRoleNotAdmin = "E0315",
     // E04xx: collaborators and teams
@@ -103,8 +106,18 @@ pub enum Applicability {
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum Edit {
-    Remove { path: String },
-    Set { path: String, value: Json },
+    Remove {
+        path: String,
+    },
+    Set {
+        path: String,
+        value: Json,
+    },
+    /// Renames the last key of `path` to `to`, keeping its value
+    Rename {
+        path: String,
+        to: String,
+    },
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -176,6 +189,7 @@ impl fmt::Display for Diagnostic {
             let edit = match &fix.edit {
                 Edit::Remove { path } => format!("remove {path}"),
                 Edit::Set { path, value } => format!("set {path} = {value}"),
+                Edit::Rename { path, to } => format!("rename {path} to {to}"),
             };
             write!(f, "\n  = fix ({applicability}): {edit}")?;
         }
