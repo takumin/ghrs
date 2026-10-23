@@ -21,6 +21,17 @@ fn rule_schema(rule: &str) -> String {
     format!("repository-rule-{}", rule.replace('_', "-"))
 }
 
+/// URL of a schema in [`REST_API_DESCRIPTION`] (`repository-ruleset` ->
+/// `...api.github.com.json#/components/schemas/repository-ruleset`).
+pub fn rest_api_schema(name: &str) -> String {
+    format!("{REST_API_DESCRIPTION}#/components/schemas/{name}")
+}
+
+/// URL of the schema that defines a rule type in [`REST_API_DESCRIPTION`].
+pub fn rest_api_rule(rule: &str) -> String {
+    rest_api_schema(&rule_schema(rule))
+}
+
 /// Where [`REST_API_DESCRIPTION`] defines what a declaration path under `rules` may contain
 /// (`ruleset.main.rules.pull_request.required_reviewers[0]` -> the `pull_request` rule). A rule
 /// ghrs does not know refers to the list of all rules. `None` outside `rules`.
@@ -45,14 +56,11 @@ pub fn rule_reference(path: &str) -> Option<String> {
         None if rest.is_empty() => "",
         None => return None,
     };
-    let schema = if Rules::KEYS.contains(&rule) || PUSH_RULES.contains(&rule) {
-        rule_schema(rule)
+    if Rules::KEYS.contains(&rule) || PUSH_RULES.contains(&rule) {
+        Some(rest_api_rule(rule))
     } else {
-        "repository-rule".to_string()
-    };
-    Some(format!(
-        "{REST_API_DESCRIPTION}#/components/schemas/{schema}"
-    ))
+        Some(rest_api_schema("repository-rule"))
+    }
 }
 
 /// IDs of built-in repository roles that can be bypass actors.
@@ -280,6 +288,33 @@ pub const MAX_RULESETS: usize = 75;
 /// Collaborator and team permissions. Built-in roles only (custom roles are Enterprise only).
 pub const PERMISSIONS: &[&str] = &["pull", "triage", "push", "maintain", "admin"];
 
+// Values of rule parameters, as enumerated in REST_API_DESCRIPTION. ghrs passes them through
+// without checking; they only constrain the JSON Schema of the declaration file.
+
+pub const MERGE_METHODS: &[&str] = &["merge", "squash", "rebase"];
+pub const MERGE_QUEUE_METHODS: &[&str] = &["MERGE", "SQUASH", "REBASE"];
+pub const MERGE_QUEUE_GROUPING: &[&str] = &["ALLGREEN", "HEADGREEN"];
+pub const PATTERN_OPERATORS: &[&str] = &["starts_with", "ends_with", "contains", "regex"];
+pub const ALERTS_THRESHOLDS: &[&str] = &["none", "errors", "errors_and_warnings", "all"];
+pub const SECURITY_ALERTS_THRESHOLDS: &[&str] = &[
+    "none",
+    "critical",
+    "high_or_higher",
+    "medium_or_higher",
+    "all",
+];
+pub const CODE_QUALITY_SEVERITIES: &[&str] = &["errors", "warnings", "notes", "all"];
+
+/// The TOML `type` of bypass actors.
+pub fn actor_type_names() -> Vec<&'static str> {
+    ACTOR_TYPES.iter().map(|(_, toml)| *toml).collect()
+}
+
+/// The TOML `type` of actors in `pull_request`.
+pub fn review_actor_type_names() -> Vec<&'static str> {
+    REVIEW_ACTOR_TYPES.iter().map(|(_, toml)| *toml).collect()
+}
+
 pub fn role_name(id: u64) -> Option<&'static str> {
     REPOSITORY_ROLES
         .iter()
@@ -344,20 +379,28 @@ mod tests {
         "require_extra_approval_for_unattributed_changes",
     )];
 
-    /// Checks [`Rules`] against [`REST_API_DESCRIPTION`]. Downloads the file with curl, so it is
-    /// run separately by `task test:rest-api`.
+    /// [`REST_API_DESCRIPTION`], downloaded with curl once per test run. The tests that use it
+    /// are run separately by `task test:rest-api`.
+    fn rest_api_description() -> &'static Json {
+        static API: std::sync::OnceLock<Json> = std::sync::OnceLock::new();
+        API.get_or_init(|| {
+            let output = std::process::Command::new("curl")
+                .args(["-fsSL", "--retry", "3", REST_API_DESCRIPTION])
+                .output()
+                .expect("cannot run curl");
+            assert!(
+                output.status.success(),
+                "cannot download {REST_API_DESCRIPTION}"
+            );
+            serde_json::from_slice(&output.stdout).unwrap()
+        })
+    }
+
+    /// Checks [`Rules`] against [`REST_API_DESCRIPTION`].
     #[test]
     #[ignore = "downloads the REST API description; run task test:rest-api"]
     fn rules_match_the_rest_api_description() {
-        let output = std::process::Command::new("curl")
-            .args(["-fsSL", "--retry", "3", REST_API_DESCRIPTION])
-            .output()
-            .expect("cannot run curl");
-        assert!(
-            output.status.success(),
-            "cannot download {REST_API_DESCRIPTION}"
-        );
-        let api: Json = serde_json::from_slice(&output.stdout).unwrap();
+        let api = rest_api_description();
         let schemas = &api["components"]["schemas"];
 
         let mut documented = BTreeMap::new();
@@ -433,6 +476,96 @@ mod tests {
                     user.contains(key) || defaults.get(key).is_some(),
                     "required parameter {rule}.{key} is neither in REQUIRED_PARAMS nor defaulted"
                 );
+            }
+        }
+    }
+
+    /// Checks the JSON Schema of the declaration file against [`REST_API_DESCRIPTION`], down to
+    /// nested parameters: every key ghrs declares exists there under its API name, a parameter
+    /// object has exactly the documented keys, and enumerated values are documented ones (all of
+    /// them, for parameters).
+    #[test]
+    #[ignore = "downloads the REST API description; run task test:rest-api"]
+    fn json_schema_matches_the_rest_api_description() {
+        let schemas = &rest_api_description()["components"]["schemas"];
+        let resolve = |v: &'static Json| -> &'static Json {
+            match v["$ref"].as_str() {
+                Some(r) => &schemas[r.trim_start_matches("#/components/schemas/")],
+                None => v,
+            }
+        };
+        let ours = crate::model::json_schema();
+        let defs = ours["$defs"].as_object().unwrap();
+        let prefix = format!("{REST_API_DESCRIPTION}#/components/schemas/");
+
+        // (our type, the documented object, whether it is a whole parameter object)
+        let mut pairs: Vec<(&str, &Json, bool)> = Vec::new();
+        for (name, def) in defs {
+            // The list of all rules is checked by rules_match_the_rest_api_description
+            if name == "Rules" {
+                continue;
+            }
+            if let Some(source) = def["x-github-source"].as_str() {
+                let component = source.strip_prefix(&prefix).unwrap();
+                let params = component.starts_with("repository-rule-params-");
+                pairs.push((name, &schemas[component], params));
+            }
+        }
+        for (rule, property) in defs["Rules"]["properties"].as_object().unwrap() {
+            if let Some(r) = property["anyOf"][1]["$ref"].as_str() {
+                let params = &schemas[rule_schema(rule)]["properties"]["parameters"];
+                pairs.push((r.trim_start_matches("#/$defs/"), params, true));
+            }
+        }
+        assert!(pairs.len() > Rules::KEYS.len(), "{pairs:?}");
+
+        let enumerated = |v: &Json| -> Option<BTreeSet<String>> {
+            let values = v["enum"].as_array().or(v["items"]["enum"].as_array())?;
+            Some(
+                values
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect(),
+            )
+        };
+        for (name, documented, params) in pairs {
+            let documented = resolve(documented)["properties"].as_object().unwrap();
+            let mut declared = BTreeSet::new();
+            for (key, property) in defs[name]["properties"].as_object().unwrap() {
+                if property["x-github-observed"] == true {
+                    continue;
+                }
+                let api = match property["x-github-api-name"].as_str() {
+                    Some(api) => api.split('.').next().unwrap(),
+                    None => key,
+                };
+                assert!(
+                    documented.contains_key(api),
+                    "{name}.{key} ({api}) is not documented"
+                );
+                declared.insert(api);
+                // Keys written by name have values in ghrs's vocabulary
+                if property["x-github-api-name"].is_string() {
+                    continue;
+                }
+                if let Some(values) = enumerated(property) {
+                    let item = resolve(&documented[api]);
+                    let item = if item["items"].is_object() {
+                        resolve(&item["items"])
+                    } else {
+                        item
+                    };
+                    let allowed = enumerated(item).unwrap_or_default();
+                    if params {
+                        assert_eq!(values, allowed, "values of {name}.{key}");
+                    } else {
+                        assert!(values.is_subset(&allowed), "values of {name}.{key}");
+                    }
+                }
+            }
+            if params {
+                let documented: BTreeSet<&str> = documented.keys().map(String::as_str).collect();
+                assert_eq!(declared, documented, "keys of {name}");
             }
         }
     }

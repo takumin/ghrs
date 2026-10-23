@@ -5,8 +5,21 @@
 //!
 //! Unknown keys are rejected on load. If a misspelled key were silently ignored, plan would
 //! report "no diff" while the setting the user meant to declare is never applied.
+//!
+//! The JSON Schema printed by `ghrs schema` is derived from these types. Doc comments become its
+//! descriptions, and `x-github-*` keywords tie the ruleset types to GitHub's REST API
+//! description:
+//! - `x-github-source`: the schema in the REST API description that the type or rule follows
+//! - `x-github-api-name`: the API's name for a key ghrs names differently or writes by name
+//! - `x-github-observed`: a key the API returns but the REST API description does not document
 
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+
+use crate::schema::{self, rest_api_schema};
 
 /// Declares a table whose fields are all optional, and lists its keys in `KEYS`. import uses
 /// `KEYS` to tell what ghrs knows from what GitHub added later.
@@ -17,9 +30,9 @@ macro_rules! optional_table {
             $($(#[$field_meta:meta])* $field:ident: $ty:ty,)*
         }
     ) => {
-        $(#[$meta])*
-        #[derive(Serialize, Deserialize, Default)]
+        #[derive(Serialize, Deserialize, Default, JsonSchema)]
         #[serde(deny_unknown_fields)]
+        $(#[$meta])*
         pub struct $name {
             $(
                 $(#[$field_meta])*
@@ -36,37 +49,48 @@ macro_rules! optional_table {
     };
 }
 
-#[derive(Serialize, Deserialize, Default)]
+/// Settings of one GitHub repository, declared for ghrs.
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
     pub meta: Meta,
     #[serde(default)]
     pub repository: Repository,
+    /// Rulesets keyed by name (`[ruleset.main]`). Rulesets not declared are kept unless plan /
+    /// apply run with --prune
     #[serde(
         rename = "ruleset",
         with = "keyed",
         default,
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[schemars(with = "BTreeMap<String, Ruleset>")]
     pub rulesets: Vec<Ruleset>,
+    /// Direct collaborators keyed by login. Collaborators not declared are kept unless plan /
+    /// apply run with --prune
     #[serde(
         rename = "collaborator",
         with = "keyed",
         default,
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[schemars(with = "BTreeMap<String, Collaborator>")]
     pub collaborators: Vec<Collaborator>,
+    /// Teams keyed by slug (Organization-owned repositories only). Teams not declared are kept
+    /// unless plan / apply run with --prune
     #[serde(
         rename = "team",
         with = "keyed",
         default,
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[schemars(with = "BTreeMap<String, Team>")]
     pub teams: Vec<Team>,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+/// The target repository. Without it, the target is taken from --repo or the git remote.
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Meta {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,15 +99,18 @@ pub struct Meta {
     pub repo: Option<String>,
 }
 
-/// Only the fields that are written are compared. Unwritten fields are left untouched.
-#[derive(Serialize, Deserialize, Default)]
+/// Repository settings, with the names of `PATCH /repos/{owner}/{repo}`. Only the fields that are
+/// written are compared. Unwritten fields are left untouched.
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Repository {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    /// Rulesets are not available on private repositories on the free plan
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("enum" = schema::VISIBILITIES))]
     pub visibility: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_issues: Option<bool>,
@@ -105,16 +132,23 @@ pub struct Repository {
     pub delete_branch_on_merge: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_branch: Option<String>,
+    /// Set with `PUT /repos/{owner}/{repo}/topics`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topics: Option<Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize)]
+/// A ruleset of the repository. Rulesets inherited from the Organization are not managed.
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("x-github-source" = rest_api_schema("repository-ruleset")))]
 pub struct Ruleset {
     #[serde(skip)]
     pub name: String,
+    /// Push rulesets are Team / Enterprise only
+    #[schemars(extend("enum" = schema::TARGETS))]
     pub target: String,
+    /// `evaluate` is Enterprise only
+    #[schemars(extend("enum" = schema::ENFORCEMENTS))]
     pub enforcement: String,
     #[serde(default)]
     pub conditions: Conditions,
@@ -124,25 +158,41 @@ pub struct Ruleset {
     pub rules: Rules,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+/// Refs the ruleset applies to (`conditions.ref_name` in the API). Patterns start with
+/// `refs/heads/` for branch rulesets and `refs/tags/` for tag rulesets, except `~ALL` and (branch
+/// rulesets only) `~DEFAULT_BRANCH`.
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("x-github-source" = rest_api_schema("repository-ruleset-conditions")))]
 pub struct Conditions {
     #[serde(default)]
+    #[schemars(extend("x-github-api-name" = "ref_name.include"))]
     pub include: Vec<String>,
     #[serde(default)]
+    #[schemars(extend("x-github-api-name" = "ref_name.exclude"))]
     pub exclude: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+/// An actor that may bypass the ruleset, written by name. ghrs resolves the name to the API's
+/// `actor_id`.
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("x-github-source" = rest_api_schema("repository-ruleset-bypass-actor")))]
 pub struct BypassActor {
+    /// `team` and `organization_admin` are Organization-owned repositories only
     #[serde(rename = "type")]
+    #[schemars(extend("enum" = schema::actor_type_names(), "x-github-api-name" = "actor_type"))]
     pub actor_type: String,
+    /// App slug (`self` for the App ghrs runs as), team slug, or role name (`maintain`, `write`
+    /// or `admin`). Only `integration` accepts a numeric App ID, for private Apps of someone else.
     /// Omitted for `organization_admin` and `deploy_key`, which refer to the whole type and have
     /// no ID.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-github-api-name" = "actor_id"))]
     pub name: Option<String>,
+    /// `pull_request` is for branch rulesets only, and not for `deploy_key`
     #[serde(default = "default_bypass_mode")]
+    #[schemars(extend("enum" = schema::BYPASS_MODES, "x-github-api-name" = "bypass_mode"))]
     pub mode: String,
 }
 
@@ -155,6 +205,10 @@ optional_table! {
     ///
     /// Rules GitHub has but this table lacks cannot be declared. plan keeps them at their current
     /// values instead of disabling them, so a rule GitHub adds later is not deleted.
+    #[schemars(
+        extend("x-github-source" = rest_api_schema("repository-rule")),
+        transform = rule_sources
+    )]
     pub struct Rules {
         creation: bool,
         update: Rule<Update>,
@@ -213,6 +267,20 @@ impl Rules {
     }
 }
 
+/// Adds to each rule where the REST API description defines it.
+fn rule_sources(schema: &mut Schema) {
+    if let Some(Json::Object(rules)) = schema.get_mut("properties") {
+        for (rule, property) in rules {
+            if let Some(property) = property.as_object_mut() {
+                property.insert(
+                    "x-github-source".to_string(),
+                    schema::rest_api_rule(rule).into(),
+                );
+            }
+        }
+    }
+}
+
 /// A rule with parameters, written as `true` / `false` or as a table of parameters.
 ///
 /// `true` keeps the current parameters (the defaults on creation). Parameters not written in a
@@ -220,6 +288,25 @@ impl Rules {
 pub enum Rule<P> {
     Enabled(bool),
     Params(P),
+}
+
+impl<P: JsonSchema> JsonSchema for Rule<P> {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> Cow<'static, str> {
+        format!("Rule_{}", P::schema_name()).into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "`true` / `false`, or a table of parameters. `true` keeps the current \
+                parameters (the defaults on creation), and parameters not written in a table keep \
+                their current values",
+            "anyOf": [{ "type": "boolean" }, generator.subschema_for::<P>()],
+        })
+    }
 }
 
 impl<P: Serialize> Serialize for Rule<P> {
@@ -270,11 +357,11 @@ optional_table! {
 optional_table! {
     pub struct MergeQueue {
         check_response_timeout_minutes: u64,
-        /// `ALLGREEN` or `HEADGREEN`
+        #[schemars(extend("enum" = schema::MERGE_QUEUE_GROUPING))]
         grouping_strategy: String,
         max_entries_to_build: u64,
         max_entries_to_merge: u64,
-        /// `MERGE`, `SQUASH` or `REBASE`
+        #[schemars(extend("enum" = schema::MERGE_QUEUE_METHODS))]
         merge_method: String,
         min_entries_to_merge: u64,
         min_entries_to_merge_wait_minutes: u64,
@@ -289,11 +376,12 @@ optional_table! {
 
 optional_table! {
     pub struct PullRequest {
-        /// `merge`, `squash` and / or `rebase`
+        #[schemars(extend("items" = { "type": "string", "enum": schema::MERGE_METHODS }))]
         allowed_merge_methods: Vec<String>,
         dismiss_stale_reviews_on_push: bool,
         require_code_owner_review: bool,
         /// Undocumented; returned by the API alongside the documented parameters (observed)
+        #[schemars(extend("x-github-observed" = true))]
         require_extra_approval_for_unattributed_changes: bool,
         require_last_push_approval: bool,
         required_approving_review_count: u64,
@@ -323,8 +411,11 @@ impl PullRequest {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("x-github-source" = rest_api_schema(
+    "repository-rule-params-required-reviewer-configuration"
+)))]
 pub struct RequiredReviewer {
     pub file_patterns: Vec<String>,
     pub minimum_approvals: u64,
@@ -332,19 +423,28 @@ pub struct RequiredReviewer {
 }
 
 optional_table! {
+    /// Organization-owned repositories only
+    #[schemars(extend("x-github-source" = rest_api_schema(
+        "repository-rule-params-dismissal-restriction"
+    )))]
     pub struct DismissalRestriction {
         enabled: bool,
         allowed_actors: Vec<ReviewActor>,
     }
 }
 
-/// An actor in `pull_request`, written by name like a bypass actor.
-#[derive(Serialize, Deserialize)]
+/// An actor in `pull_request`, written by name like a bypass actor. ghrs resolves the name to the
+/// API's `id`. `required_reviewers` accepts only `team`, and a `repository_role` in
+/// `dismissal_restriction` must be `admin`.
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewActor {
-    /// `team`, `repository_role`, `user` or `integration` (App slug)
     #[serde(rename = "type")]
+    #[schemars(extend("enum" = schema::review_actor_type_names()))]
     pub actor_type: String,
+    /// Team slug, role name, user login, or App slug (`self` for the App ghrs runs as). An App
+    /// is sent as its installation ID in the Organization
+    #[schemars(extend("x-github-api-name" = "id"))]
     pub name: String,
 }
 
@@ -352,18 +452,24 @@ optional_table! {
     /// Keys are shorter than the API's: `strict` is `strict_required_status_checks_policy`, and
     /// `checks` is `required_status_checks`.
     pub struct RequiredStatusChecks {
+        #[schemars(extend("x-github-api-name" = "strict_required_status_checks_policy"))]
         strict: bool,
         do_not_enforce_on_create: bool,
+        #[schemars(extend("x-github-api-name" = "required_status_checks"))]
         checks: Vec<StatusCheck>,
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("x-github-source" = rest_api_schema(
+    "repository-rule-params-status-check-configuration"
+)))]
 pub struct StatusCheck {
     pub context: String,
-    /// App slug that must report the check
+    /// Slug of the App that must report the check. ghrs resolves it to the App ID
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-github-api-name" = "integration_id"))]
     pub integration: Option<String>,
 }
 
@@ -372,7 +478,7 @@ optional_table! {
     pub struct Pattern {
         name: String,
         negate: bool,
-        /// `starts_with`, `ends_with`, `contains` or `regex`
+        #[schemars(extend("enum" = schema::PATTERN_OPERATORS))]
         operator: String,
         pattern: String,
     }
@@ -385,8 +491,13 @@ optional_table! {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+/// `repository_id` is a numeric ID, which ghrs cannot resolve from a name yet, so validation
+/// rejects it and this rule cannot be declared.
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("x-github-source" = rest_api_schema(
+    "repository-rule-params-workflow-file-reference"
+)))]
 pub struct WorkflowFile {
     pub path: String,
     #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
@@ -402,17 +513,22 @@ optional_table! {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("x-github-source" = rest_api_schema(
+    "repository-rule-params-code-scanning-tool"
+)))]
 pub struct CodeScanningTool {
+    #[schemars(extend("enum" = schema::ALERTS_THRESHOLDS))]
     pub alerts_threshold: String,
+    #[schemars(extend("enum" = schema::SECURITY_ALERTS_THRESHOLDS))]
     pub security_alerts_threshold: String,
     pub tool: String,
 }
 
 optional_table! {
     pub struct CodeQuality {
-        /// `errors`, `warnings`, `notes` or `all`
+        #[schemars(extend("enum" = schema::CODE_QUALITY_SEVERITIES))]
         severity: String,
     }
 }
@@ -432,20 +548,65 @@ optional_table! {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+/// The repository owner cannot be declared. On a personal repository, only `push` is available.
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Collaborator {
     #[serde(skip)]
     pub login: String,
+    #[schemars(extend("enum" = schema::PERMISSIONS))]
     pub permission: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Team {
     #[serde(skip)]
     pub slug: String,
+    #[schemars(extend("enum" = schema::PERMISSIONS))]
     pub permission: String,
+}
+
+/// JSON Schema of the declaration file, for editors (e.g. taplo) and coding agents.
+pub fn json_schema() -> Json {
+    let mut schema = schemars::generate::SchemaSettings::draft2020_12()
+        .into_generator()
+        .into_root_schema_for::<Config>()
+        .to_value();
+    without_null(&mut schema);
+    schema["title"] = "ghrs declaration file (.ghrs.toml)".into();
+    schema["x-github-rest-api-description"] = schema::REST_API_DESCRIPTION.into();
+    schema
+}
+
+/// Drop `null` from the schema. TOML has no null, so an omitted key is how an `Option` is unset.
+fn without_null(v: &mut Json) {
+    match v {
+        Json::Object(map) => {
+            if map.get("default") == Some(&Json::Null) {
+                map.remove("default");
+            }
+            if let Some(Json::Array(types)) = map.get_mut("type") {
+                types.retain(|t| t != "null");
+                if let [only] = types.as_slice() {
+                    let only = only.clone();
+                    map.insert("type".to_string(), only);
+                }
+            }
+            if let Some(Json::Array(any_of)) = map.get_mut("anyOf") {
+                any_of.retain(|s| s.get("type").is_none_or(|t| t != "null"));
+                if let [only] = any_of.as_slice()
+                    && let Json::Object(only) = only.clone()
+                {
+                    map.remove("anyOf");
+                    map.extend(only);
+                }
+            }
+            map.values_mut().for_each(without_null);
+        }
+        Json::Array(items) => items.iter_mut().for_each(without_null),
+        _ => {}
+    }
 }
 
 /// An entry written as a table keyed by its name (`[ruleset.main]`) rather than as an element of
@@ -529,6 +690,149 @@ mod keyed {
 mod tests {
     use super::*;
     use crate::schema::PARAMETERIZED_RULES;
+
+    /// Checks `value` against the subset of JSON Schema that [`json_schema`] produces, and
+    /// collects the paths that do not match.
+    fn mismatches(
+        root: &Json,
+        schema: &Json,
+        value: &toml::Value,
+        path: &str,
+        out: &mut Vec<String>,
+    ) {
+        let schema = match schema["$ref"].as_str() {
+            Some(r) => &root["$defs"][r.trim_start_matches("#/$defs/")],
+            None => schema,
+        };
+        if let Some(any_of) = schema["anyOf"].as_array() {
+            let fits = any_of.iter().any(|branch| {
+                let mut errors = Vec::new();
+                mismatches(root, branch, value, path, &mut errors);
+                errors.is_empty()
+            });
+            if !fits {
+                out.push(format!("{path}: matches no branch of anyOf"));
+            }
+            return;
+        }
+        if let Some(allowed) = schema["enum"].as_array()
+            && !allowed
+                .iter()
+                .any(|a| Some(a.as_str()) == Some(value.as_str()))
+        {
+            out.push(format!("{path}: {value} is not in the enum"));
+        }
+        let fits = match (schema["type"].as_str(), value) {
+            (None, _) => true,
+            (Some("string"), toml::Value::String(_)) => true,
+            (Some("boolean"), toml::Value::Boolean(_)) => true,
+            (Some("integer"), toml::Value::Integer(_)) => true,
+            (Some("number"), toml::Value::Integer(_) | toml::Value::Float(_)) => true,
+            (Some("array"), toml::Value::Array(items)) => {
+                for (i, item) in items.iter().enumerate() {
+                    mismatches(root, &schema["items"], item, &format!("{path}[{i}]"), out);
+                }
+                true
+            }
+            (Some("object"), toml::Value::Table(table)) => {
+                for (key, item) in table {
+                    let at = format!("{path}.{key}");
+                    match (&schema["properties"][key], &schema["additionalProperties"]) {
+                        (Json::Null, Json::Bool(false)) => out.push(format!("{at}: unknown key")),
+                        (Json::Null, Json::Null) => {}
+                        (Json::Null, additional) => mismatches(root, additional, item, &at, out),
+                        (property, _) => mismatches(root, property, item, &at, out),
+                    }
+                }
+                for key in schema["required"].as_array().into_iter().flatten() {
+                    if !table.contains_key(key.as_str().unwrap_or_default()) {
+                        out.push(format!("{path}: missing {key}"));
+                    }
+                }
+                true
+            }
+            _ => false,
+        };
+        if !fits {
+            out.push(format!("{path}: {value} is not of type {}", schema["type"]));
+        }
+    }
+
+    fn schema_mismatches(text: &str) -> Vec<String> {
+        let schema = json_schema();
+        let value: toml::Value = toml::from_str(text).unwrap();
+        let mut out = Vec::new();
+        mismatches(&schema, &schema, &value, "", &mut out);
+        out
+    }
+
+    /// The JSON Schema and the parser agree on the README sample
+    #[test]
+    fn json_schema_accepts_what_ghrs_accepts() {
+        let readme = include_str!("../README.md");
+        let sample = readme
+            .split("## Declaration file")
+            .nth(1)
+            .and_then(|s| s.split("```toml\n").nth(1))
+            .and_then(|s| s.split("```").next())
+            .unwrap();
+        assert!(crate::validate::parse(sample).is_ok());
+        assert_eq!(schema_mismatches(sample), Vec::<String>::new());
+
+        let rules = "[ruleset.r]\ntarget = \"branch\"\nenforcement = \"active\"\n\
+            [ruleset.r.rules]\nupdate = true\n[ruleset.r.rules.pull_request]\n\
+            dismissal_restriction = { enabled = true, allowed_actors = [\
+                { type = \"integration\", name = \"self\" }] }\n\
+            [ruleset.r.rules.code_coverage]\nminimum_coverage = 80\n";
+        assert!(crate::validate::parse(rules).is_ok());
+        assert_eq!(schema_mismatches(rules), Vec::<String>::new());
+    }
+
+    #[test]
+    fn json_schema_rejects_what_ghrs_rejects() {
+        let ruleset = |body: &str| {
+            format!("[ruleset.r]\ntarget = \"branch\"\nenforcement = \"active\"\n{body}")
+        };
+        for (text, mismatch) in [
+            (
+                "[repository]\nallow_rebase = false",
+                ".repository.allow_rebase: unknown key",
+            ),
+            (
+                &ruleset("[ruleset.r.rules]\nnon_fast_foward = true"),
+                ".ruleset.r.rules.non_fast_foward: unknown key",
+            ),
+            (
+                &ruleset("[ruleset.r.rules]\npull_request = 1"),
+                ".ruleset.r.rules.pull_request: matches no branch of anyOf",
+            ),
+            (
+                "[collaborator.octocat]\npermission = \"write\"",
+                ".collaborator.octocat.permission: \"write\" is not in the enum",
+            ),
+            (
+                "[ruleset.r]\ntarget = \"branch\"",
+                ".ruleset.r: missing \"enforcement\"",
+            ),
+        ] {
+            assert_eq!(schema_mismatches(text), [mismatch], "{text}");
+        }
+    }
+
+    #[test]
+    fn json_schema_has_no_null_and_sources_every_rule() {
+        let schema = json_schema();
+        assert!(!schema.to_string().contains("\"null\""));
+        let rules = schema["$defs"]["Rules"]["properties"].as_object().unwrap();
+        assert_eq!(rules.len(), Rules::KEYS.len());
+        for (rule, property) in rules {
+            assert_eq!(
+                property["x-github-source"],
+                Json::from(schema::rest_api_rule(rule)),
+                "{rule}"
+            );
+        }
+    }
 
     #[test]
     fn rules_with_parameters_are_known_to_the_schema() {

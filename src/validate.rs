@@ -7,9 +7,9 @@ use std::collections::HashSet;
 use crate::diagnostic::{Applicability, Code, Diagnostic, Diagnostics, Edit};
 use crate::model::{BypassActor, Config, ReviewActor, Rule, Ruleset};
 use crate::schema::{
-    ACTOR_TYPES, ACTORS_WITHOUT_ID, BRANCH_ONLY_RULES, BYPASS_MODES, ENFORCEMENTS, MAX_RULESETS,
-    ORG_ONLY_RULES, PERMISSIONS, PUSH_RULES, REPOSITORY_ROLES, ROLES_WITHOUT_WRITE, TAG_ONLY_RULES,
-    TARGETS, VISIBILITIES, actor_type_to_api, ref_patterns, role_id,
+    ACTORS_WITHOUT_ID, BRANCH_ONLY_RULES, BYPASS_MODES, ENFORCEMENTS, MAX_RULESETS, ORG_ONLY_RULES,
+    PERMISSIONS, PUSH_RULES, REPOSITORY_ROLES, ROLES_WITHOUT_WRITE, TAG_ONLY_RULES, TARGETS,
+    VISIBILITIES, actor_type_names, actor_type_to_api, ref_patterns, role_id,
 };
 
 fn allowed(values: &[&str]) -> String {
@@ -623,7 +623,7 @@ fn check_actor(
 ) {
     let kind = actor.actor_type.as_str();
     if actor_type_to_api(kind).is_none() {
-        let types: Vec<&str> = ACTOR_TYPES.iter().map(|(_, toml)| *toml).collect();
+        let types = actor_type_names();
         errors.push(
             Diagnostic::error(
                 Code::UnknownActorType,

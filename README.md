@@ -55,6 +55,7 @@ The target repository is taken from `--repo OWNER/NAME`, then from `[meta]` in t
 | `ghrs apply` | Apply the difference to GitHub |
 | `ghrs import` | Export the current settings in `.ghrs.toml` format |
 | `ghrs drift` | Report only whether there is any difference |
+| `ghrs schema` | Write the JSON Schema of the declaration file |
 | `ghrs completion <SHELL>` | Write a shell completion script to standard output |
 
 Common options for `plan` and `apply`:
@@ -73,6 +74,20 @@ When a change weakens protection, `apply` asks you to type the repository name i
 Without a terminal, `apply` refuses to proceed unless `--yes` is given.
 
 `drift --exit-code` exits with status 2 when there is a difference, which is useful for scheduled checks in CI.
+
+## JSON Schema
+
+`ghrs schema` writes the JSON Schema of the declaration file, which editors and coding agents can use to find the allowed keys and values.
+`import --schema` references it from the first line of the output in the form [taplo](https://taplo.tamasfe.dev/) reads.
+
+```sh
+ghrs schema --out ghrs.schema.json
+ghrs import --schema ./ghrs.schema.json --out .ghrs.toml
+```
+
+Rulesets follow GitHub's REST API, and the schema ties them to [its description](https://github.com/github/rest-api-description) at the commit ghrs was checked against.
+`x-github-source` names the schema there that a type or rule follows, `x-github-api-name` gives the API's name for a key ghrs names differently or writes by name, and `x-github-observed` marks a key the API returns but does not document.
+Validation errors under `rules` carry the same reference.
 
 ## Declaration file
 

@@ -70,6 +70,11 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         cli::Command::Plan(args) => plan(args, &cli.auth).await,
         cli::Command::Apply(args) => apply(args, &cli.auth).await,
         cli::Command::Drift(args) => drift(args, &cli.auth).await,
+        cli::Command::Schema(args) => {
+            let text = format!("{}\n", serde_json::to_string_pretty(&model::json_schema())?);
+            write_output(args.out.as_deref(), &text)?;
+            Ok(ExitCode::SUCCESS)
+        }
         cli::Command::Completion(args) => {
             let mut command = Cli::command();
             let name = command.get_name().to_string();
@@ -87,13 +92,12 @@ async fn import(args: ImportArgs, auth: &AuthArgs) -> Result<ExitCode> {
     let (gh, self_app) = auth::connect(auth::resolve(auth)?, &target).await?;
     let mut importer = import::Importer::new(gh, self_app.as_ref());
     let config = importer.run(&target.owner, &target.name).await?;
-    let output = import::render(&config)?;
-
-    match &args.out {
-        Some(path) => std::fs::write(path, output)
-            .with_context(|| format!("failed to write {}", path.display()))?,
-        None => out(&output)?,
+    let mut output = import::render(&config)?;
+    if let Some(schema) = &args.schema {
+        // taplo reads the schema from this directive on the first line
+        output = format!("#:schema {schema}\n\n{output}");
     }
+    write_output(args.out.as_deref(), &output)?;
 
     for warning in &importer.warnings {
         note(&format!("warning: {warning}\n"));
@@ -133,6 +137,15 @@ async fn print_writes(gh: &GitHub, plan: &plan::Plan) -> Result<()> {
         ),
         Err(_) => format!("writes needed for apply: {}\n", plan.writes),
     })
+}
+
+/// Write to `path`, or to stdout without one.
+fn write_output(path: Option<&Path>, text: &str) -> Result<()> {
+    match path {
+        Some(path) => std::fs::write(path, text)
+            .with_context(|| format!("failed to write {}", path.display())),
+        None => out(text),
+    }
 }
 
 /// Write to stderr. Failures are ignored, since there is nowhere to report them.

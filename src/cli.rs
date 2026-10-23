@@ -51,6 +51,8 @@ pub enum Command {
     Import(ImportArgs),
     /// Report only whether there is any difference
     Drift(DriftArgs),
+    /// Write the JSON Schema of the declaration file
+    Schema(SchemaArgs),
     /// Write a shell completion script to standard output
     Completion(CompletionArgs),
 }
@@ -62,7 +64,7 @@ impl Command {
             Command::Plan(args) => args.json,
             Command::Apply(args) => args.plan.json,
             Command::Drift(args) => args.json,
-            Command::Import(_) | Command::Completion(_) => false,
+            Command::Import(_) | Command::Schema(_) | Command::Completion(_) => false,
         }
     }
 }
@@ -118,6 +120,17 @@ pub struct ImportArgs {
     #[arg(long, value_name = "OWNER/NAME")]
     pub repo: Option<RepoRef>,
 
+    /// Output path (default: standard output)
+    #[arg(long, value_name = "PATH")]
+    pub out: Option<PathBuf>,
+
+    /// Reference this JSON Schema (path or URL) from the output with a `#:schema` comment
+    #[arg(long, value_name = "PATH")]
+    pub schema: Option<String>,
+}
+
+#[derive(Args)]
+pub struct SchemaArgs {
     /// Output path (default: standard output)
     #[arg(long, value_name = "PATH")]
     pub out: Option<PathBuf>,
