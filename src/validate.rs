@@ -881,6 +881,37 @@ checks = [{ context = "test" }, { context = "build", integration = "github-actio
     }
 
     #[test]
+    fn rule_diagnostics_refer_to_the_rest_api_description() {
+        let reference = |toml: &str| parse_error(toml).reference;
+        let schema = |name: &str| {
+            Some(format!(
+                "{}#/components/schemas/{name}",
+                crate::schema::REST_API_DESCRIPTION
+            ))
+        };
+        assert_eq!(
+            reference(&ruleset(
+                "[ruleset.r.rules.pull_request]\nrequired_approving_review_cnt = 1"
+            )),
+            schema("repository-rule-pull-request")
+        );
+        // An unknown rule refers to the list of all rules
+        assert_eq!(
+            reference(&ruleset("[ruleset.r.rules]\nnon_fast_foward = true")),
+            schema("repository-rule")
+        );
+        assert_eq!(reference("[repository]\nallow_rebase = false"), None);
+
+        let toml = ruleset("[ruleset.r.rules.tag_name_pattern]\noperator = \"starts_with\"");
+        let errors = errors(&toml);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].reference,
+            schema("repository-rule-tag-name-pattern")
+        );
+    }
+
+    #[test]
     fn lists_allowed_keys_when_nothing_is_close() {
         let d = parse_error("[collaborator.octocat]\nrole = \"push\"");
         assert_eq!(d.path.as_deref(), Some("collaborator.octocat.role"));

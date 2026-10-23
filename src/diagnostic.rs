@@ -9,6 +9,8 @@ use serde_json::Value as Json;
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::schema;
+
 macro_rules! codes {
     ($($name:ident = $code:literal,)*) => {
         /// Diagnostic code. A number is never reused for a different meaning.
@@ -139,6 +141,10 @@ pub struct Diagnostic {
     pub help: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix: Option<Fix>,
+    /// Where GitHub's REST API description defines what `path` may contain. Set for paths under
+    /// a ruleset's `rules`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
 }
 
 impl Diagnostic {
@@ -150,11 +156,14 @@ impl Diagnostic {
             path: None,
             help: None,
             fix: None,
+            reference: None,
         }
     }
 
     pub fn at(mut self, path: impl Into<String>) -> Self {
-        self.path = Some(path.into());
+        let path = path.into();
+        self.reference = schema::rule_reference(&path);
+        self.path = Some(path);
         self
     }
 
@@ -192,6 +201,9 @@ impl fmt::Display for Diagnostic {
                 Edit::Rename { path, to } => format!("rename {path} to {to}"),
             };
             write!(f, "\n  = fix ({applicability}): {edit}")?;
+        }
+        if let Some(reference) = &self.reference {
+            write!(f, "\n  = reference: {reference}")?;
         }
         Ok(())
     }

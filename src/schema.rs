@@ -3,6 +3,58 @@
 
 use serde_json::{Value as Json, json};
 
+use crate::model::Rules;
+
+/// The GitHub REST API description the rule types in [`Rules`] were checked against.
+///
+/// `task test:rest-api` downloads this file and checks that the rule types and their parameters
+/// still match it. Change the commit only together with that check.
+pub const REST_API_DESCRIPTION: &str = concat!(
+    "https://raw.githubusercontent.com/github/rest-api-description/",
+    "755ee33b4a81d51f6f07a902cce26cbec3b822f2",
+    "/descriptions/api.github.com/api.github.com.json",
+);
+
+/// Name of the schema that defines a rule type in [`REST_API_DESCRIPTION`]. Every rule follows
+/// this naming (`pull_request` -> `repository-rule-pull-request`).
+fn rule_schema(rule: &str) -> String {
+    format!("repository-rule-{}", rule.replace('_', "-"))
+}
+
+/// Where [`REST_API_DESCRIPTION`] defines what a declaration path under `rules` may contain
+/// (`ruleset.main.rules.pull_request.required_reviewers[0]` -> the `pull_request` rule). A rule
+/// ghrs does not know refers to the list of all rules. `None` outside `rules`.
+pub fn rule_reference(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("ruleset.")?;
+    // Skip the ruleset name, which is a bare key or a JSON-quoted string
+    let rest = match rest.strip_prefix('"') {
+        Some(quoted) => {
+            let mut escaped = false;
+            let end = quoted.char_indices().find(|&(_, c)| {
+                let closes = c == '"' && !escaped;
+                escaped = c == '\\' && !escaped;
+                closes
+            })?;
+            &quoted[end.0 + 1..]
+        }
+        None => &rest[rest.find('.')?..],
+    };
+    let rest = rest.strip_prefix(".rules")?;
+    let rule = match rest.strip_prefix('.') {
+        Some(rest) => &rest[..rest.find(['.', '[']).unwrap_or(rest.len())],
+        None if rest.is_empty() => "",
+        None => return None,
+    };
+    let schema = if Rules::KEYS.contains(&rule) || PUSH_RULES.contains(&rule) {
+        rule_schema(rule)
+    } else {
+        "repository-rule".to_string()
+    };
+    Some(format!(
+        "{REST_API_DESCRIPTION}#/components/schemas/{schema}"
+    ))
+}
+
 /// IDs of built-in repository roles that can be bypass actors.
 ///
 /// GitHub does not document these officially. Observed via GraphQL `repositoryRoleName`.
@@ -250,6 +302,34 @@ pub fn actor_type_to_api(toml: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rule_references_point_into_the_rest_api_description() {
+        let schema = |name: &str| format!("{REST_API_DESCRIPTION}#/components/schemas/{name}");
+        assert_eq!(
+            rule_reference("ruleset.main.rules.pull_request.required_reviewers[0].reviewer"),
+            Some(schema("repository-rule-pull-request"))
+        );
+        assert_eq!(
+            rule_reference(r#"ruleset."release/v1.x".rules.non_fast_forward"#),
+            Some(schema("repository-rule-non-fast-forward"))
+        );
+        assert_eq!(
+            rule_reference(r#"ruleset."a\".rules".rules.max_file_size"#),
+            Some(schema("repository-rule-max-file-size"))
+        );
+        assert_eq!(
+            rule_reference("ruleset.main.rules.non_fast_foward"),
+            Some(schema("repository-rule"))
+        );
+        assert_eq!(
+            rule_reference("ruleset.main.rules"),
+            Some(schema("repository-rule"))
+        );
+        assert_eq!(rule_reference("ruleset.main.rulesx"), None);
+        assert_eq!(rule_reference("ruleset.main.bypass_actors[0]"), None);
+        assert_eq!(rule_reference("repository.allow_rebase"), None);
+    }
 
     /// Before changing the constant tables, record the observed evidence first.
     #[test]
