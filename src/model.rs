@@ -423,7 +423,8 @@ pub struct RequiredReviewer {
 }
 
 optional_table! {
-    /// Organization-owned repositories only
+    /// Organization-owned repositories only. `enabled` is required unless the ruleset already has
+    /// a restriction, whose keys not written here keep their current values
     #[schemars(extend("x-github-source" = rest_api_schema(
         "repository-rule-params-dismissal-restriction"
     )))]

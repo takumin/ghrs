@@ -215,7 +215,7 @@ pub fn desired(
                     Some(Json::Object(map)) => map,
                     _ => Map::new(),
                 };
-                merged.extend(declared_params(rule, table, dir, &at)?);
+                merge_params(&mut merged, declared_params(rule, table, dir, &at)?);
                 Some(Json::Object(merged))
             }
             _ => bail!("{at}: rules.{rule} must be a boolean or a table"),
@@ -232,6 +232,15 @@ pub fn desired(
                     missing.join(", ")
                 );
             }
+        }
+        // Required by the REST API description inside the table, so REQUIRED_PARAMS cannot hold
+        // it. A restriction GitHub already has keeps its value through the merge.
+        if let Some(restriction) = params.as_ref().and_then(|p| p.get("dismissal_restriction"))
+            && restriction.get("enabled").is_none()
+        {
+            bail!(
+                "{at}: rules.{rule}.dismissal_restriction is missing required parameters: enabled"
+            );
         }
         rules.insert(rule.clone(), params);
     }
@@ -306,6 +315,19 @@ fn normalize(mut rules: BTreeMap<String, Option<Json>>) -> BTreeMap<String, Opti
 
 /// Map a rule's table to API parameters. Only `required_status_checks` is converted, because
 /// the TOML side uses shorter names.
+/// Merge declared parameters into the current ones. Nested tables are merged key by key, so a
+/// key not written in them keeps its current value as well. Arrays are replaced as a whole.
+fn merge_params(current: &mut Map<String, Json>, declared: Map<String, Json>) {
+    for (key, value) in declared {
+        match (current.get_mut(&key), value) {
+            (Some(Json::Object(have)), Json::Object(want)) => merge_params(have, want),
+            (_, value) => {
+                current.insert(key, value);
+            }
+        }
+    }
+}
+
 fn declared_params(
     rule: &str,
     table: &Map<String, Json>,
@@ -584,6 +606,48 @@ mod tests {
             "parameters": { "operator": "starts_with", "pattern": "feat", "negate": false }
         }]));
         assert!(desired(&partial, Some(&cur), &Directory::default()).is_ok());
+    }
+
+    /// Keys not written in a nested table keep their current values
+    #[test]
+    fn nested_tables_merge_with_current_parameters() {
+        let cur = current(json!([{ "type": "pull_request", "parameters": {
+            "required_approving_review_count": 1,
+            "dismissal_restriction": {
+                "enabled": true,
+                "allowed_actors": [{ "id": 5, "type": "RepositoryRole" }],
+            },
+        } }]));
+        let want = desired(
+            &decl("[rules.pull_request.dismissal_restriction]\nenabled = true"),
+            Some(&cur),
+            &Directory::default(),
+        )
+        .unwrap();
+        assert_eq!(want.rules["pull_request"], cur.rules["pull_request"]);
+
+        let want = desired(
+            &decl(
+                "[rules.pull_request.dismissal_restriction]\n\
+                 allowed_actors = [{ type = \"repository_role\", name = \"admin\" }]",
+            ),
+            Some(&cur),
+            &Directory::default(),
+        )
+        .unwrap();
+        assert_eq!(want.rules["pull_request"], cur.rules["pull_request"]);
+    }
+
+    #[test]
+    fn new_dismissal_restriction_needs_enabled() {
+        let decl = decl(
+            "[rules.pull_request.dismissal_restriction]\n\
+             allowed_actors = [{ type = \"repository_role\", name = \"admin\" }]",
+        );
+        let Err(err) = desired(&decl, None, &Directory::default()) else {
+            panic!("accepted a dismissal_restriction without enabled");
+        };
+        assert!(err.to_string().contains("dismissal_restriction"), "{err}");
     }
 
     #[test]
