@@ -1,7 +1,7 @@
 //! Read the current state from the GitHub API and convert it into the `.ghrs.toml` model.
 
 use anyhow::{Context, Result, bail};
-use serde_json::{Map, Value as Json, json};
+use serde_json::{Map, Value as Json};
 use std::collections::HashMap;
 
 use crate::access;
@@ -9,7 +9,8 @@ use crate::auth::SelfApp;
 use crate::diagnostic::Diagnostics;
 use crate::github::GitHub;
 use crate::model::{
-    BypassActor, Collaborator, Conditions, Config, Meta, Repository, Rules, Ruleset, Team,
+    BypassActor, CodeScanningTool, Collaborator, Conditions, Config, DismissalRestriction, Meta,
+    Repository, RequiredReviewer, Rules, Ruleset, Team, WorkflowFile,
 };
 use crate::repo::RepoRef;
 use crate::resolve;
@@ -219,7 +220,8 @@ impl Importer {
                     None => {
                         self.warn(format!(
                             "ruleset \"{ruleset}\": observed unknown repository role ID {id}; \
-                            review the table of built-in roles"
+                            wrote the numeric ID, which plan rejects until it is replaced with \
+                            the role name (review the table of built-in roles)"
                         ));
                         id.to_string()
                     }
@@ -240,7 +242,8 @@ impl Importer {
                     None => {
                         self.warn(format!(
                             "ruleset \"{ruleset}\": cannot resolve team ID {id} to a name; wrote \
-                            the numeric ID instead"
+                            the numeric ID, which plan rejects until it is replaced with the \
+                            team slug"
                         ));
                         id.to_string()
                     }
@@ -376,7 +379,8 @@ impl Importer {
             let name = name.unwrap_or_else(|| {
                 self.warn(format!(
                     "ruleset \"{ruleset}\": cannot resolve {kind} ID {id} in pull_request to a \
-                    name; wrote the numeric ID instead"
+                    name; wrote the numeric ID, which plan rejects until it is replaced with the \
+                    name"
                 ));
                 id.to_string()
             });
@@ -401,6 +405,15 @@ impl Importer {
             .cloned()
             .unwrap_or_default()
         {
+            for key in check.as_object().into_iter().flatten().map(|(k, _)| k) {
+                if key != "context" && key != "integration_id" {
+                    self.warn(unsupported_param(
+                        ruleset,
+                        "required_status_checks",
+                        &format!("required_status_checks[].{key}"),
+                    ));
+                }
+            }
             let mut entry = Map::new();
             entry.insert("context".to_string(), check["context"].clone());
             if let Some(id) = check["integration_id"].as_u64() {
@@ -411,12 +424,21 @@ impl Importer {
             }
             checks.push(Json::Object(entry));
         }
-        let flag = |key: &str| params[key].as_bool().unwrap_or(false);
-        json!({
-            "strict": flag("strict_required_status_checks_policy"),
-            "do_not_enforce_on_create": flag("do_not_enforce_on_create"),
-            "checks": checks,
-        })
+        let mut out = Map::new();
+        for (key, value) in params.as_object().into_iter().flatten() {
+            let key = match key.as_str() {
+                "strict_required_status_checks_policy" => "strict",
+                "do_not_enforce_on_create" => "do_not_enforce_on_create",
+                "required_status_checks" => continue,
+                _ => {
+                    self.warn(unsupported_param(ruleset, "required_status_checks", key));
+                    continue;
+                }
+            };
+            out.insert(key.to_string(), value.clone());
+        }
+        out.insert("checks".to_string(), Json::Array(checks));
+        Json::Object(out)
     }
 
     fn plain_params(
@@ -429,25 +451,14 @@ impl Importer {
         let obj = params.as_object().with_context(|| {
             format!("ruleset \"{ruleset}\": parameters of rule \"{rule_type}\" are not an object")
         })?;
-        let known = Rules::param_keys(rule_type).unwrap_or_default();
-
-        let mut out = Map::new();
-        for (key, value) in obj {
-            if key.ends_with("_id") || key.ends_with("_ids") {
-                bail!(
-                    "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{rule_type}\" is a \
-                    numeric ID; \
-                    it cannot be imported until name resolution for it is implemented"
-                );
-            }
-            if !known.contains(&key.as_str()) {
-                self.warn(format!(
-                    "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{rule_type}\" is not \
-                    supported; left it out of the declaration, and plan keeps it as is"
-                ));
-                continue;
-            }
-            out.insert(key.clone(), value.clone());
+        let (out, dropped) = known_params(rule_type, obj).map_err(|key| {
+            anyhow::anyhow!(
+                "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{rule_type}\" is a \
+                numeric ID; it cannot be imported until name resolution for it is implemented"
+            )
+        })?;
+        for key in dropped {
+            self.warn(unsupported_param(ruleset, rule_type, &key));
         }
 
         if rule_type == "pull_request" && target != "branch" {
@@ -456,8 +467,106 @@ impl Importer {
             ));
         }
 
-        Ok(Json::Object(out))
+        Ok(out)
     }
+}
+
+/// Known keys of the tables nested in rule parameters, by their path in the parameters (`[]`
+/// stands for an element of an array). Tables not listed are taken as they are.
+const NESTED_KEYS: &[(&str, &[&str])] = &[
+    (
+        "pull_request.dismissal_restriction",
+        DismissalRestriction::KEYS,
+    ),
+    ("pull_request.required_reviewers[]", RequiredReviewer::KEYS),
+    (
+        "code_scanning.code_scanning_tools[]",
+        CodeScanningTool::KEYS,
+    ),
+    ("workflows.workflows[]", WorkflowFile::KEYS),
+];
+
+/// The parameters of `rule` that [`Rules`] can hold, and the paths of the ones left out.
+/// A key holding a numeric ID, at any depth, is an `Err` with its path: ghrs cannot write it by
+/// name yet, and leaving it out would change it.
+fn known_params(
+    rule: &str,
+    params: &Map<String, Json>,
+) -> std::result::Result<(Json, Vec<String>), String> {
+    fn filter(
+        path: &str,
+        rel: &str,
+        value: &Json,
+        known: Option<&[&str]>,
+        dropped: &mut Vec<String>,
+    ) -> std::result::Result<Json, String> {
+        match value {
+            Json::Object(map) => {
+                let mut out = Map::new();
+                for (key, value) in map {
+                    let child = if rel.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{rel}.{key}")
+                    };
+                    if key.ends_with("_id") || key.ends_with("_ids") {
+                        return Err(child);
+                    }
+                    if known.is_some_and(|known| !known.contains(&key.as_str())) {
+                        dropped.push(child);
+                        continue;
+                    }
+                    let nested = format!("{path}.{key}");
+                    let known = NESTED_KEYS
+                        .iter()
+                        .find(|(p, _)| *p == nested)
+                        .map(|(_, k)| *k);
+                    out.insert(key.clone(), filter(&nested, &child, value, known, dropped)?);
+                }
+                Ok(Json::Object(out))
+            }
+            Json::Array(items) => {
+                let nested = format!("{path}[]");
+                let known = NESTED_KEYS
+                    .iter()
+                    .find(|(p, _)| *p == nested)
+                    .map(|(_, k)| *k);
+                let rel = format!("{rel}[]");
+                items
+                    .iter()
+                    .map(|item| filter(&nested, &rel, item, known, dropped))
+                    .collect::<std::result::Result<_, _>>()
+                    .map(Json::Array)
+            }
+            other => Ok(other.clone()),
+        }
+    }
+
+    let mut dropped = Vec::new();
+    let known = Rules::param_keys(rule).unwrap_or_default();
+    let out = filter(
+        rule,
+        "",
+        &Json::Object(params.clone()),
+        Some(known),
+        &mut dropped,
+    )?;
+    dropped.sort();
+    dropped.dedup();
+    Ok((out, dropped))
+}
+
+/// Inside an array, the element is replaced as a whole, so plan cannot keep the key.
+fn unsupported_param(ruleset: &str, rule: &str, key: &str) -> String {
+    let kept = if key.contains("[]") {
+        "plan shows its removal, since an array element is replaced as a whole"
+    } else {
+        "plan keeps it as is"
+    };
+    format!(
+        "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{rule}\" is not supported; left it \
+        out of the declaration, and {kept}"
+    )
 }
 
 /// Renders the imported declaration. Arrays of tables (`bypass_actors`, `checks`, ...) are written
@@ -505,6 +614,59 @@ fn string_array(v: &Json) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn params(v: Json) -> Map<String, Json> {
+        v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn leaves_out_unknown_nested_parameters() {
+        let (out, dropped) = known_params(
+            "pull_request",
+            &params(json!({
+                "required_approving_review_count": 1,
+                "future": true,
+                "dismissal_restriction": { "enabled": false, "new_key": true },
+                "required_reviewers": [{
+                    "file_patterns": ["*"], "minimum_approvals": 1,
+                    "reviewer": { "type": "team", "name": "a" }, "extra": 1,
+                }],
+            })),
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            json!({
+                "required_approving_review_count": 1,
+                "dismissal_restriction": { "enabled": false },
+                "required_reviewers": [{
+                    "file_patterns": ["*"], "minimum_approvals": 1,
+                    "reviewer": { "type": "team", "name": "a" },
+                }],
+            })
+        );
+        assert_eq!(
+            dropped,
+            [
+                "dismissal_restriction.new_key",
+                "future",
+                "required_reviewers[].extra"
+            ]
+        );
+        // What import writes must be readable as the model
+        let _: crate::model::PullRequest = serde_json::from_value(out).unwrap();
+    }
+
+    #[test]
+    fn rejects_nested_numeric_ids() {
+        let err = known_params(
+            "workflows",
+            &params(json!({ "workflows": [{ "path": "a.yml", "repository_id": 123 }] })),
+        )
+        .unwrap_err();
+        assert_eq!(err, "workflows[].repository_id");
+    }
 
     #[test]
     fn renders_keyed_tables_with_inline_arrays() {
