@@ -57,8 +57,13 @@ pub fn resolve(args: &AuthArgs) -> Result<Credential> {
             key: read_key(path)?,
         });
     }
-    if let Some(token) = nonempty(args.token.clone()) {
-        return Ok(Credential::Token(read_token(&token)?));
+    if let Some(token) = &args.token {
+        // An empty value usually comes from an unset variable (--token "$TOKEN"). Falling through
+        // would quietly use another credential
+        if token.trim().is_empty() {
+            bail!("--token is empty");
+        }
+        return Ok(Credential::Token(read_token(token)?));
     }
 
     if let Some(id) = nonempty(std::env::var("GHRS_APP_ID").ok()) {
@@ -199,13 +204,15 @@ fn token_client(token: &str) -> Result<octocrab::Octocrab> {
         .build()?)
 }
 
-/// Reads a PEM file, or the PEM (or base64 PEM) behind a 1Password secret reference.
+/// Reads the PEM (or base64 PEM) in a file or behind a 1Password secret reference.
 fn read_key(path: &Path) -> Result<Vec<u8>> {
     if let Some(reference) = path.to_str().filter(|p| is_secret_ref(p)) {
         return decode_key(&read_secret(reference)?)
             .with_context(|| format!("cannot read private key {reference}"));
     }
-    std::fs::read(path).with_context(|| format!("cannot read private key {}", path.display()))
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("cannot read private key {}", path.display()))?;
+    decode_key(&text).with_context(|| format!("cannot read private key {}", path.display()))
 }
 
 fn read_token(value: &str) -> Result<String> {
@@ -241,10 +248,17 @@ fn read_secret(value: &str) -> Result<String> {
 
 /// Accepts either raw PEM or base64-encoded PEM. The latter is for CI secrets that cannot hold
 /// values containing newlines.
+///
+/// PEM may come after other text, such as the `Bag Attributes` openssl writes when exporting a
+/// key, and may be on one line with its newlines written as `\n`, as JSON and env files hold it.
 fn decode_key(value: &str) -> Result<Vec<u8>> {
     let value = value.trim();
-    if value.starts_with("-----BEGIN") {
-        return Ok(value.as_bytes().to_vec());
+    if let Some(start) = value.find("-----BEGIN") {
+        let pem = &value[start..];
+        if !pem.contains('\n') && pem.contains("\\n") {
+            return Ok(pem.replace("\\n", "\n").into_bytes());
+        }
+        return Ok(pem.as_bytes().to_vec());
     }
     let compact: String = value.split_whitespace().collect();
     base64::engine::general_purpose::STANDARD
@@ -309,6 +323,24 @@ mod tests {
         assert_eq!(decode_key(&wrapped).unwrap(), pem.as_bytes());
 
         assert!(decode_key("not a key!").is_err());
+
+        let escaped = pem.trim().replace('\n', "\\n");
+        assert_eq!(decode_key(&escaped).unwrap(), pem.trim().as_bytes());
+        let exported = format!("Bag Attributes\n    localKeyID: 01 02\n{pem}");
+        assert_eq!(decode_key(&exported).unwrap(), pem.trim().as_bytes());
+    }
+
+    #[test]
+    fn rejects_empty_token_flag() {
+        let args = AuthArgs {
+            app_id: None,
+            private_key: None,
+            token: Some(" ".to_string()),
+        };
+        let Err(err) = resolve(&args) else {
+            panic!("accepted an empty --token");
+        };
+        assert!(err.to_string().contains("--token"), "{err}");
     }
 
     #[test]
