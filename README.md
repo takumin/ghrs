@@ -94,42 +94,37 @@ delete_branch_on_merge = true
 default_branch = "main"
 topics = ["github", "cli"]
 
-[[ruleset]]
-name = "main"
+# Each ruleset is a table keyed by its name.
+[ruleset.main]
 target = "branch"        # "branch" or "tag"
 enforcement = "active"   # "active" or "disabled"
+bypass_actors = [
+  # type: integration, organization_admin, repository_role, team, deploy_key
+  # mode: always (default), pull_request, exempt
+  { type = "integration", name = "renovate", mode = "pull_request" },
+  { type = "repository_role", name = "admin" },
+]
 
-[ruleset.conditions]
+[ruleset.main.conditions]
 include = ["~DEFAULT_BRANCH"]
 exclude = []
 
-[[ruleset.bypass_actors]]
-type = "integration"     # integration, organization_admin, repository_role, team, deploy_key
-name = "renovate"
-mode = "pull_request"    # always (default), pull_request, exempt
-
-[[ruleset.bypass_actors]]
-type = "repository_role"
-name = "admin"
-
 # Rules not listed here are disabled.
-[ruleset.rules]
+[ruleset.main.rules]
 deletion = true
 non_fast_forward = true
 
-[ruleset.rules.pull_request]
+[ruleset.main.rules.pull_request]
 required_approving_review_count = 1
 
-[ruleset.rules.required_status_checks]
+[ruleset.main.rules.required_status_checks]
 strict = true
 checks = [{ context = "test" }, { context = "build", integration = "github-actions" }]
 
-[[collaborator]]
-login = "octocat"
+[collaborator.octocat]   # keyed by login
 permission = "push"      # pull, triage, push, maintain, admin
 
-[[team]]
-slug = "maintainers"
+[team.maintainers]       # keyed by slug
 permission = "maintain"
 ```
 
