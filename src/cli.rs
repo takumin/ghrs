@@ -72,7 +72,7 @@ impl Command {
 
 #[derive(Args)]
 pub struct PlanArgs {
-    /// Target repository (taken from [meta], then from git remote, if omitted)
+    /// Target repository (taken from `[meta]`, then from git remote, if omitted)
     #[arg(long, value_name = "OWNER/NAME")]
     pub repo: Option<RepoRef>,
 
@@ -139,7 +139,7 @@ pub struct SchemaArgs {
 
 #[derive(Args)]
 pub struct DriftArgs {
-    /// Target repository (taken from [meta], then from git remote, if omitted)
+    /// Target repository (taken from `[meta]`, then from git remote, if omitted)
     #[arg(long, value_name = "OWNER/NAME")]
     pub repo: Option<RepoRef>,
 
