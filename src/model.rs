@@ -500,7 +500,7 @@ optional_table! {
 }
 
 /// `repository_id` is a numeric ID, which ghrs cannot resolve from a name yet, so validation
-/// rejects it and this rule cannot be declared.
+/// rejects it: a workflow file cannot be declared. `workflows = true` keeps the current ones.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(extend("x-github-source" = rest_api_schema(

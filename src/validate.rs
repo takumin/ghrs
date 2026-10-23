@@ -182,6 +182,22 @@ fn distance(a: &str, b: &str) -> usize {
 pub fn check(config: &Config, app_auth: bool) -> Vec<Diagnostic> {
     let mut errors = Vec::new();
 
+    // Each is one segment of the API route (`/repos/{owner}/{repo}`)
+    for (key, value) in [("owner", &config.meta.owner), ("repo", &config.meta.repo)] {
+        if let Some(value) = value
+            && (value.is_empty() || value.contains(['/', ' ', '?', '#']))
+        {
+            errors.push(
+                Diagnostic::error(
+                    Code::InvalidMeta,
+                    format!("meta.{key} \"{value}\" is not a valid {key} name"),
+                )
+                .at(format!("meta.{key}"))
+                .help("write the owner and the repository name separately, as in owner/repo"),
+            );
+        }
+    }
+
     if let Some(visibility) = &config.repository.visibility
         && !VISIBILITIES.contains(&visibility.as_str())
     {
@@ -241,6 +257,9 @@ pub fn check(config: &Config, app_auth: bool) -> Vec<Diagnostic> {
     let mut slugs = HashSet::new();
     for t in &config.teams {
         let path = entry_path("team", &t.slug);
+        if t.slug.is_empty() {
+            errors.push(Diagnostic::error(Code::EmptySlug, "team slug is empty").at(&path));
+        }
         if !slugs.insert(t.slug.to_ascii_lowercase()) {
             errors.push(
                 Diagnostic::error(
@@ -703,6 +722,11 @@ fn check_actor(
         )
         .at(path)
         .help("add name = \"...\""),
+        (_, Some(value)) if value.trim().is_empty() => Diagnostic::error(
+            Code::EmptyActorName,
+            format!("{at}: {kind} bypass actor has an empty name"),
+        )
+        .at(&name),
         ("integration", Some("self")) if !app_auth => Diagnostic::error(
             Code::SelfNeedsApp,
             format!(
@@ -768,6 +792,14 @@ fn check_review_actor(
             )
             .at(format!("{full}.type"))
             .help(allowed(kinds)),
+        );
+    } else if name.trim().is_empty() {
+        errors.push(
+            Diagnostic::error(
+                Code::EmptyActorName,
+                format!("{at}: name in {path} is empty"),
+            )
+            .at(format!("{full}.name")),
         );
     } else if is_numeric(name) {
         errors.push(
@@ -1136,6 +1168,43 @@ name = "owner"
             1
         );
         assert!(check_context(&config, "takumin", true, "public", &ALL).is_empty());
+    }
+
+    #[test]
+    fn rejects_empty_names() {
+        let codes = |toml: &str| -> Vec<Code> {
+            let config: Config = toml::from_str(toml).unwrap();
+            check(&config, false).iter().map(|d| d.code).collect()
+        };
+        assert_eq!(
+            codes("[team.\"\"]\npermission = \"push\""),
+            [Code::EmptySlug]
+        );
+        assert_eq!(
+            codes(&ruleset(
+                "[[ruleset.r.bypass_actors]]\ntype = \"team\"\nname = \"\""
+            )),
+            [Code::EmptyActorName]
+        );
+        assert_eq!(
+            codes(&ruleset(
+                "[ruleset.r.rules.pull_request.dismissal_restriction]\nenabled = true\n\
+                allowed_actors = [{ type = \"team\", name = \" \" }]"
+            )),
+            [Code::EmptyActorName]
+        );
+    }
+
+    #[test]
+    fn rejects_meta_that_is_not_one_segment() {
+        let config: Config = toml::from_str("[meta]\nowner = \"takumin\"\nrepo = \"a/b\"").unwrap();
+        let errors = check(&config, false);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code, Code::InvalidMeta);
+        assert_eq!(errors[0].path.as_deref(), Some("meta.repo"));
+        let config: Config =
+            toml::from_str("[meta]\nowner = \"takumin\"\nrepo = \"ghrs\"").unwrap();
+        assert!(check(&config, false).is_empty());
     }
 
     #[test]
