@@ -753,8 +753,10 @@ mod tests {
     fn flags_weakening_rules_and_conditions() {
         let have = RulesetState::from_api(&json!({
             "id": 1, "name": "r", "target": "branch", "enforcement": "active",
-            "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH", "refs/heads/release"],
-                                          "exclude": [] } },
+            "conditions": { "ref_name": {
+                "include": ["~DEFAULT_BRANCH", "refs/heads/release"],
+                "exclude": [],
+            } },
             "bypass_actors": [],
             "rules": [
                 { "type": "deletion" },
@@ -772,8 +774,10 @@ mod tests {
         .unwrap();
         let want = RulesetState::from_api(&json!({
             "id": 1, "name": "r", "target": "tag", "enforcement": "active",
-            "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"],
-                                          "exclude": ["refs/heads/tmp"] } },
+            "conditions": { "ref_name": {
+                "include": ["~DEFAULT_BRANCH"],
+                "exclude": ["refs/heads/tmp"],
+            } },
             "bypass_actors": [],
             "rules": [
                 { "type": "pull_request", "parameters": {
@@ -794,14 +798,14 @@ mod tests {
             changes[0].destructive,
             [
                 "ruleset \"r\": changes target from \"branch\" to \"tag\"; the refs it covered \
-                 lose protection",
+                    lose protection",
                 "ruleset \"r\": removes \"refs/heads/release\" from conditions.include",
                 "ruleset \"r\": adds \"refs/heads/tmp\" to conditions.exclude",
                 "ruleset \"r\": removes rule deletion",
                 "ruleset \"r\": changes rules.pull_request.require_code_owner_review from true \
-                 to false",
+                    to false",
                 "ruleset \"r\": changes rules.pull_request.required_approving_review_count from \
-                 2 to 1",
+                    2 to 1",
                 "ruleset \"r\": removes an entry from rules.required_status_checks.checks",
             ]
         );

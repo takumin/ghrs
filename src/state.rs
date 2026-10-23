@@ -652,7 +652,7 @@ mod tests {
         let want = desired(
             &decl(
                 "[rules.pull_request.dismissal_restriction]\n\
-                 allowed_actors = [{ type = \"repository_role\", name = \"admin\" }]",
+                    allowed_actors = [{ type = \"repository_role\", name = \"admin\" }]",
             ),
             Some(&cur),
             &Directory::default(),
@@ -665,7 +665,7 @@ mod tests {
     fn new_dismissal_restriction_needs_enabled() {
         let decl = decl(
             "[rules.pull_request.dismissal_restriction]\n\
-             allowed_actors = [{ type = \"repository_role\", name = \"admin\" }]",
+                allowed_actors = [{ type = \"repository_role\", name = \"admin\" }]",
         );
         let Err(err) = desired(&decl, None, &Directory::default()) else {
             panic!("accepted a dismissal_restriction without enabled");

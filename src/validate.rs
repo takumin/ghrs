@@ -1322,8 +1322,9 @@ permission = "maintain"
     #[test]
     fn checks_only_what_is_in_scope() {
         let toml = format!(
-            "[repository]\nvisibility = \"public\"\n\n[collaborator.bob]\npermission = \"admin\"\n\n\
-             [team.maintainers]\npermission = \"maintain\"\n\n{}",
+            "[repository]\nvisibility = \"public\"\n\n\
+                [collaborator.bob]\npermission = \"admin\"\n\n\
+                [team.maintainers]\npermission = \"maintain\"\n\n{}",
             ruleset("[[ruleset.r.bypass_actors]]\ntype = \"organization_admin\"")
         );
         let config: Config = toml::from_str(&toml).unwrap();
