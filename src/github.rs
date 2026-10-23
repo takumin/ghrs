@@ -75,6 +75,28 @@ impl GitHub {
         .with_context(|| format!("GET {route}"))
     }
 
+    /// Like [`Self::get_all`], for list endpoints that wrap each page in an object
+    /// (`{"total_count": 1, "<key>": [...]}`). Returns 404 as `None`.
+    pub async fn get_all_wrapped(&mut self, route: &str, key: &str) -> Result<Option<Vec<Json>>> {
+        let separator = if route.contains('?') { '&' } else { '?' };
+        let mut items = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let url = format!("{route}{separator}per_page={PER_PAGE}&page={page}");
+            let Some(mut v) = self.get_optional(&url).await? else {
+                return Ok(None);
+            };
+            let Json::Array(chunk) = v[key].take() else {
+                bail!("response page {page} of GET {route} has no {key} array");
+            };
+            let last = chunk.len() < PER_PAGE;
+            items.extend(chunk);
+            if last {
+                return Ok(Some(items));
+            }
+        }
+        bail!("stopped fetching after {MAX_PAGES} pages")
+    }
+
     /// Return 404 as `None`. Used for calls that double as existence checks.
     pub async fn get_optional(&mut self, route: &str) -> Result<Option<Json>> {
         self.calls += 1;

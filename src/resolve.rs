@@ -6,6 +6,7 @@
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 
+use crate::auth::SelfApp;
 use crate::github::GitHub;
 use crate::model::{Config, Rule};
 use crate::repo::RepoRef;
@@ -21,6 +22,9 @@ pub struct Directory {
     team_names: HashMap<u64, String>,
     users: HashMap<String, u64>,
     user_names: HashMap<u64, String>,
+    /// App slug -> installation ID, for `pull_request` actors
+    installations: HashMap<String, u64>,
+    installation_names: HashMap<u64, String>,
 }
 
 impl Directory {
@@ -30,6 +34,10 @@ impl Directory {
 
     pub fn team_id(&self, slug: &str) -> Option<u64> {
         self.teams.get(slug).copied()
+    }
+
+    pub fn installation_id(&self, slug: &str) -> Option<u64> {
+        self.installations.get(slug).copied()
     }
 
     /// login is case-insensitive
@@ -62,14 +70,20 @@ impl Directory {
                 .get(&id)
                 .cloned()
                 .unwrap_or_else(|| id.to_string()),
+            "IntegrationInstallation" => self
+                .installation_names
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| id.to_string()),
             _ => return None,
         })
     }
 
-    /// When running as an App, bind the reserved word `self` to the App's own ID.
-    /// If the App itself appears in the current state, it is displayed as `self`.
-    pub fn add_self(&mut self, id: u64) {
-        self.add_app("self", id);
+    /// When running as an App, bind the reserved word `self` to the App's own ID and
+    /// installation ID. If the App itself appears in the current state, it is displayed as `self`.
+    pub fn add_self(&mut self, app: &SelfApp) {
+        self.add_app("self", app.id);
+        self.add_installation("self", app.installation_id);
     }
 
     fn add_app(&mut self, name: &str, id: u64) {
@@ -89,6 +103,14 @@ impl Directory {
         self.user_names.insert(id, login.to_string());
     }
 
+    fn add_installation(&mut self, slug: &str, id: u64) {
+        self.installations.insert(slug.to_string(), id);
+        // Keep `self` as the display name when the org listing also names the App
+        self.installation_names
+            .entry(id)
+            .or_insert_with(|| slug.to_string());
+    }
+
     #[cfg(test)]
     pub fn with_app(mut self, name: &str, id: u64) -> Self {
         self.add_app(name, id);
@@ -104,6 +126,12 @@ impl Directory {
     #[cfg(test)]
     pub fn with_user(mut self, login: &str, id: u64) -> Self {
         self.add_user(login, id);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_installation(mut self, slug: &str, id: u64) -> Self {
+        self.add_installation(slug, id);
         self
     }
 }
@@ -135,6 +163,9 @@ pub async fn declared(
                 match actor.actor_type.as_str() {
                     "team" => team(gh, dir, &target.owner, &actor.name, &at).await?,
                     "user" => user(gh, dir, &actor.name, &at).await?,
+                    "integration" => {
+                        installation(gh, dir, &target.owner, &actor.name, &at).await?;
+                    }
                     _ => {}
                 }
             }
@@ -163,6 +194,7 @@ pub async fn labels(
     let mut app_ids = Vec::new();
     let mut team_ids = Vec::new();
     let mut user_ids = Vec::new();
+    let mut installation_ids = Vec::new();
     for state in current {
         for actor in &state.actors {
             match (actor.actor_type.as_str(), actor.actor_id) {
@@ -176,8 +208,21 @@ pub async fn labels(
             match kind.as_str() {
                 "Team" => team_ids.push(id),
                 "User" => user_ids.push(id),
+                "IntegrationInstallation" => installation_ids.push(id),
                 _ => {}
             }
+        }
+    }
+
+    // Only an Organization owner can list installations. Without the permission they are just
+    // shown as numbers
+    if installation_ids
+        .iter()
+        .any(|id| !dir.installation_names.contains_key(id))
+        && let Some(list) = org_installations(gh, &target.owner).await?
+    {
+        for (id, slug) in list {
+            dir.add_installation(&slug, id);
         }
     }
 
@@ -270,6 +315,61 @@ async fn team(gh: &mut GitHub, dir: &mut Directory, org: &str, slug: &str, at: &
         bail!("response of GET /orgs/{org}/teams/{slug} has no id");
     };
     dir.add_team(slug, id);
+    Ok(())
+}
+
+/// The Organization's App installations as (installation ID, App slug). `None` when the token
+/// cannot list them.
+///
+/// The documentation asks classic PATs for `admin:read`, but an owner's token with only
+/// `read:org` can list them, and a non-member gets 404 (observed).
+pub async fn org_installations(gh: &mut GitHub, org: &str) -> Result<Option<Vec<(u64, String)>>> {
+    let Some(list) = gh
+        .get_all_wrapped(&format!("/orgs/{org}/installations"), "installations")
+        .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(
+        list.iter()
+            .filter_map(|i| Some((i["id"].as_u64()?, i["app_slug"].as_str()?.to_string())))
+            .collect(),
+    ))
+}
+
+/// Resolve an App in `pull_request` to its installation ID in the Organization.
+async fn installation(
+    gh: &mut GitHub,
+    dir: &mut Directory,
+    org: &str,
+    slug: &str,
+    at: &str,
+) -> Result<()> {
+    if dir.installations.contains_key(slug) {
+        return Ok(());
+    }
+    if slug == "self" {
+        bail!(
+            "{at}: integration \"self\" in pull_request is only available with GitHub App \
+            authentication (it cannot be resolved with a PAT)"
+        );
+    }
+    let Some(list) = org_installations(gh, org).await? else {
+        bail!(
+            "{at}: cannot list the App installations of Organization \"{org}\" to resolve \
+            integration \"{slug}\" in pull_request\n  \
+            -> resolving Apps in pull_request needs a token of an owner of the Organization"
+        );
+    };
+    for (id, name) in list {
+        dir.add_installation(&name, id);
+    }
+    if !dir.installations.contains_key(slug) {
+        bail!(
+            "{at}: App \"{slug}\" in pull_request is not installed in Organization \"{org}\"\n  \
+            -> install the App on the Organization, or check the App slug"
+        );
+    }
     Ok(())
 }
 

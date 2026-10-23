@@ -29,6 +29,9 @@ impl Credential {
 /// The App itself when running as an App. Used to resolve `integration = "self"`.
 pub struct SelfApp {
     pub id: u64,
+    /// The App's installation on the target repository. `pull_request` actors refer to Apps by
+    /// installation ID rather than App ID
+    pub installation_id: u64,
 }
 
 /// `~/.config/ghrs/config.toml`
@@ -162,7 +165,13 @@ pub async fn connect(
 
     let mut gh = GitHub::new(token_client(token)?);
     gh.calls = app.calls;
-    Ok((gh, Some(SelfApp { id })))
+    Ok((
+        gh,
+        Some(SelfApp {
+            id,
+            installation_id,
+        }),
+    ))
 }
 
 /// Reading and writing rulesets and repository settings requires Administration: write.

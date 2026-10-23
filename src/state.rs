@@ -348,6 +348,7 @@ fn review_actor(actor: &mut Json, dir: &Directory, at: &str) -> Result<()> {
     let id = match kind {
         "team" => dir.team_id(name),
         "user" => dir.user_id(name),
+        "integration" => dir.installation_id(name),
         "repository_role" => role_id(name),
         _ => None,
     }
@@ -408,6 +409,7 @@ fn strings(v: &Json) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::SelfApp;
 
     fn decl(body: &str) -> Ruleset {
         let toml = format!("target = \"branch\"\nenforcement = \"active\"\n{body}");
@@ -682,6 +684,43 @@ mod tests {
             &Directory::default(),
         );
         assert!(unresolved.is_err());
+    }
+
+    /// Apps in pull_request are referred to by installation ID, unlike bypass actors
+    #[test]
+    fn apps_in_pull_request_use_installation_ids() {
+        let ruleset = |name: &str| {
+            decl(&format!(
+                "[rules.pull_request.dismissal_restriction]\nenabled = true\n\
+                allowed_actors = [{{ type = \"integration\", name = \"{name}\" }}]"
+            ))
+        };
+        let actors = |want: &RulesetState| {
+            want.rules["pull_request"].as_ref().unwrap()["dismissal_restriction"]["allowed_actors"]
+                .clone()
+        };
+
+        let dir = Directory::default()
+            .with_app("approver", 4533362)
+            .with_installation("approver", 152340499);
+        let want = desired(&ruleset("approver"), None, &dir).unwrap();
+        assert_eq!(
+            actors(&want),
+            json!([{ "id": 152340499, "type": "IntegrationInstallation" }])
+        );
+        assert!(desired(&ruleset("approver"), None, &Directory::default()).is_err());
+
+        let mut dir = Directory::default();
+        dir.add_self(&SelfApp {
+            id: 4533362,
+            installation_id: 152340499,
+        });
+        let want = desired(&ruleset("self"), None, &dir).unwrap();
+        assert_eq!(
+            actors(&want),
+            json!([{ "id": 152340499, "type": "IntegrationInstallation" }])
+        );
+        assert_eq!(dir.app_id("self"), Some(4533362));
     }
 
     #[test]

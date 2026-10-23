@@ -12,6 +12,7 @@ use crate::model::{
     BypassActor, Collaborator, Conditions, Config, Meta, Repository, Rules, Ruleset, Team,
 };
 use crate::repo::RepoRef;
+use crate::resolve;
 use crate::schema::{for_each_review_actor, review_actor_type_to_toml, role_name};
 use crate::validate;
 
@@ -20,6 +21,11 @@ pub struct Importer {
     app_names: HashMap<u64, String>,
     /// For an Organization-owned repository, that Organization's team ID -> slug
     team_names: Option<HashMap<u64, String>>,
+    /// The owner, when it is an Organization
+    org: Option<String>,
+    /// Installation ID -> App slug, for Apps in `pull_request`. Listed on first use
+    installation_names: HashMap<u64, String>,
+    installations_listed: bool,
     pub warnings: Vec<String>,
 }
 
@@ -32,6 +38,11 @@ impl Importer {
                 .map(|app| HashMap::from([(app.id, "self".to_string())]))
                 .unwrap_or_default(),
             team_names: None,
+            org: None,
+            installation_names: self_app
+                .map(|app| HashMap::from([(app.installation_id, "self".to_string())]))
+                .unwrap_or_default(),
+            installations_listed: false,
             warnings: Vec::new(),
         }
     }
@@ -48,6 +59,7 @@ impl Importer {
         let (repository, owned_by_org) = self.repository(owner, repo).await?;
         if owned_by_org {
             self.team_names = Some(self.org_teams(owner).await?);
+            self.org = Some(owner.to_string());
         }
         let rulesets = self.rulesets(owner, repo).await?;
         // Outputting it would fail validation in plan anyway, so stop here and prompt for removal
@@ -247,6 +259,21 @@ impl Importer {
         })
     }
 
+    /// Only an Organization owner can list installations, so on failure the ID is left numeric.
+    async fn installation_slug(&mut self, id: u64) -> Option<String> {
+        if !self.installation_names.contains_key(&id) && !self.installations_listed {
+            self.installations_listed = true;
+            if let Some(org) = self.org.clone()
+                && let Ok(Some(list)) = resolve::org_installations(&mut self.gh, &org).await
+            {
+                for (id, slug) in list {
+                    self.installation_names.entry(id).or_insert(slug);
+                }
+            }
+        }
+        self.installation_names.get(&id).cloned()
+    }
+
     async fn org_teams(&mut self, org: &str) -> Result<HashMap<u64, String>> {
         let list = self.gh.get_all(&format!("/orgs/{org}/teams")).await?;
         Ok(list
@@ -338,6 +365,7 @@ impl Importer {
             let name = match kind.as_str() {
                 "Team" => self.team_names.as_ref().and_then(|t| t.get(&id)).cloned(),
                 "RepositoryRole" => role_name(id).map(str::to_string),
+                "IntegrationInstallation" => self.installation_slug(id).await,
                 "User" => match self.get(format!("/user/{id}")).await {
                     Ok(v) => v["login"].as_str().map(str::to_string),
                     Err(_) => None,

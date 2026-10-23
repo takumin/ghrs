@@ -234,7 +234,7 @@ pub async fn run(
 
         let mut dir = Directory::default();
         if let Some(app) = self_app {
-            dir.add_self(app.id);
+            dir.add_self(app);
         }
         resolve::declared(gh, target, config, &mut dir).await?;
 

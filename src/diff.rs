@@ -673,6 +673,50 @@ mod tests {
     }
 
     #[test]
+    fn apps_in_pull_request_are_shown_by_slug() {
+        let rules = |id: u64| {
+            json!([{ "type": "pull_request", "parameters": {
+                "dismissal_restriction": { "enabled": true, "allowed_actors": [
+                    { "id": id, "type": "IntegrationInstallation" },
+                ] },
+            } }])
+        };
+        let dir = Directory::default().with_installation("approver", 152340499);
+        let have = state("active", vec![], rules(100451791));
+        let want = state("active", vec![], rules(152340499));
+        let (changes, _) = rulesets(&[want], &[have], false, &dir);
+        let changed: Vec<_> = changes[0]
+            .fields
+            .iter()
+            .filter(|f| f.op != Op::Same)
+            .map(|f| {
+                (
+                    f.op,
+                    f.path.as_str(),
+                    f.before.as_ref().or(f.after.as_ref()),
+                )
+            })
+            .collect();
+        let path = "rules.pull_request.dismissal_restriction.allowed_actors";
+        assert_eq!(
+            changed,
+            [
+                (
+                    Op::Add,
+                    path,
+                    Some(&json!({ "type": "integration", "name": "approver" }))
+                ),
+                // An installation that cannot be listed stays numeric
+                (
+                    Op::Remove,
+                    path,
+                    Some(&json!({ "type": "integration", "name": "100451791" }))
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn repository_compares_declared_fields_only() {
         let decl: Repository =
             toml::from_str("description = \"x\"\nhas_wiki = false\ntopics = [\"b\", \"a\"]")

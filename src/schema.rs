@@ -204,12 +204,18 @@ pub const ACTOR_TYPES: &[(&str, &str)] = &[
 ];
 
 /// Kind of actor referenced as `{id, type}` in `pull_request` parameters. Mapping between the
-/// API's `type` and the TOML `type`. `required_reviewers[].reviewer` accepts only Team, while
-/// `dismissal_restriction.allowed_actors[]` accepts all three kinds (observed).
+/// API's `type` and the TOML `type`. `required_reviewers[].reviewer` accepts only Team (an App
+/// yields 422 `data matches no possible input`), while `dismissal_restriction.allowed_actors[]`
+/// accepts all four kinds (observed).
+///
+/// The `id` of an App is its installation ID, unlike bypass actors, which use the App ID. An App
+/// ID yields a 422 that does not name the cause (`Dismissal apps must have write access to the
+/// repository` or `Invalid node ID format`) (observed).
 pub const REVIEW_ACTOR_TYPES: &[(&str, &str)] = &[
     ("Team", "team"),
     ("RepositoryRole", "repository_role"),
     ("User", "user"),
+    ("IntegrationInstallation", "integration"),
 ];
 
 pub fn review_actor_type_to_toml(api: &str) -> Option<&'static str> {

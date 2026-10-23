@@ -342,7 +342,7 @@ optional_table! {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewActor {
-    /// `team`, `repository_role` or `user`
+    /// `team`, `repository_role`, `user` or `integration` (App slug)
     #[serde(rename = "type")]
     pub actor_type: String,
     pub name: String,

@@ -604,10 +604,11 @@ fn check_ruleset(base: &str, ruleset: &Ruleset, app_auth: bool, errors: &mut Vec
             let kinds: &[&str] = if path.starts_with("required_reviewers") {
                 &["team"]
             } else {
-                &["team", "repository_role", "user"]
+                &["team", "repository_role", "user", "integration"]
             };
             let path = format!("rules.pull_request.{path}");
-            check_review_actor(&at, &path, &format!("{base}.{path}"), actor, kinds, errors);
+            let full = format!("{base}.{path}");
+            check_review_actor(&at, &path, &full, actor, kinds, app_auth, errors);
         }
     }
 }
@@ -737,6 +738,7 @@ fn check_review_actor(
     full: &str,
     actor: &ReviewActor,
     kinds: &[&str],
+    app_auth: bool,
     errors: &mut Vec<Diagnostic>,
 ) {
     let (kind, name) = (actor.actor_type.as_str(), actor.name.as_str());
@@ -757,6 +759,18 @@ fn check_review_actor(
             )
             .at(format!("{full}.name"))
             .help(format!("specify the {kind} by name")),
+        );
+    } else if kind == "integration" && name == "self" && !app_auth {
+        errors.push(
+            Diagnostic::error(
+                Code::SelfNeedsApp,
+                format!(
+                    "{at}: name = \"self\" in {path} is only available with GitHub App \
+                    authentication (it cannot be resolved with a PAT)"
+                ),
+            )
+            .at(format!("{full}.name"))
+            .help("authenticate as a GitHub App (--app-id / GHRS_APP_ID), or write the App slug"),
         );
     } else if kind == "repository_role" && name != "admin" {
         // GitHub rejects anything other than admin with 422 (Only the Repository admin role is
@@ -1226,6 +1240,30 @@ permission = "maintain"
             2
         );
         assert!(check_context(&config, "takumin", true, "public", true).is_empty());
+    }
+
+    #[test]
+    fn apps_are_allowed_only_as_dismissal_actors() {
+        let pr = |body: &str| ruleset(&format!("[ruleset.r.rules.pull_request]\n{body}"));
+        let dismissal = |name: &str| {
+            pr(&format!(
+                "dismissal_restriction = {{ allowed_actors = [\
+                    {{ type = \"integration\", name = \"{name}\" }}] }}"
+            ))
+        };
+        assert!(errors(&dismissal("takumin-pr-approver")).is_empty());
+
+        let errors_of = |toml: &str| errors(toml).into_iter().map(|d| d.code).collect::<Vec<_>>();
+        assert_eq!(errors_of(&dismissal("self")), [Code::SelfNeedsApp]);
+        let config: Config = toml::from_str(&dismissal("self")).unwrap();
+        assert!(check(&config, true).is_empty());
+
+        // required_reviewers rejects Apps with 422 (observed)
+        let reviewer = pr(
+            "required_reviewers = [{ file_patterns = [\"*\"], minimum_approvals = 1, \
+            reviewer = { type = \"integration\", name = \"takumin-pr-approver\" } }]",
+        );
+        assert_eq!(errors_of(&reviewer), [Code::ReviewActorTypeNotAllowed]);
     }
 
     #[test]
