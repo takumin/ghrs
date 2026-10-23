@@ -203,8 +203,6 @@ pub fn desired(
             .or_else(|| rule_defaults(rule));
         let params = match value {
             Json::Bool(false) => continue,
-            // `update = true` is sugar for update_allows_fetch_and_merge = false
-            Json::Bool(true) if rule == "update" => None,
             // A parameterized rule written as a boolean is treated the same as a table that
             // declares no parameters
             Json::Bool(true) => current_params.or_else(|| {
@@ -263,7 +261,8 @@ pub fn desired(
 /// Normalize rules that have the same meaning but different representations into one shape.
 ///
 /// For `update`, `update_allows_fetch_and_merge = false` is the default, and in that case GitHub
-/// returns `{"type": "update"}` without parameters (observed). The normal form has no parameters.
+/// returns `{"type": "update"}` without parameters (observed). The normal form has no parameters,
+/// also for the empty table a new `update = true` starts from.
 ///
 /// `copilot_code_review` is the opposite: even when sent without parameters or with only some,
 /// GitHub returns it with missing keys filled with false (observed). Only old rulesets are
@@ -283,7 +282,8 @@ fn normalize(mut rules: BTreeMap<String, Option<Json>>) -> BTreeMap<String, Opti
         }
     }
     if let Some(params) = rules.get_mut("update")
-        && *params == Some(json!({ "update_allows_fetch_and_merge": false }))
+        && (*params == Some(json!({ "update_allows_fetch_and_merge": false }))
+            || *params == Some(json!({})))
     {
         *params = None;
     }
@@ -587,7 +587,21 @@ mod tests {
     }
 
     #[test]
-    fn update_true_is_sugar() {
+    fn update_true_keeps_current_parameters() {
+        let cur = current(json!([{
+            "type": "update", "parameters": { "update_allows_fetch_and_merge": true },
+        }]));
+        let want = desired(
+            &decl("[rules]\nupdate = true"),
+            Some(&cur),
+            &Directory::default(),
+        )
+        .unwrap();
+        assert_eq!(want.rules["update"], cur.rules["update"]);
+    }
+
+    #[test]
+    fn update_without_fetch_and_merge_has_no_parameters() {
         let sugar = desired(&decl("[rules]\nupdate = true"), None, &Directory::default()).unwrap();
         let table = desired(
             &decl("[rules.update]\nupdate_allows_fetch_and_merge = false"),

@@ -326,7 +326,8 @@ impl Importer {
 
             let value = match (rule_type.as_str(), params) {
                 (_, None) => Json::Bool(true),
-                // `update = true` is sugar for update_allows_fetch_and_merge = false.
+                // update_allows_fetch_and_merge = false is the default, so `true` declares it.
+                // Any other parameters are kept, since `true` keeps the current ones.
                 ("update", Some(params))
                     if params["update_allows_fetch_and_merge"] == Json::Bool(false) =>
                 {
