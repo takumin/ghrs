@@ -10,6 +10,7 @@ mod diff;
 mod explain;
 mod github;
 mod import;
+mod lint;
 mod model;
 mod plan;
 mod render;
@@ -301,30 +302,32 @@ async fn drift(args: DriftArgs, auth: &AuthArgs) -> Result<ExitCode> {
     })
 }
 
-/// Validate each declaration file with what `plan` checks before its first API call. Reads no
-/// credentials, so it runs anywhere the files are.
+/// Validate each declaration file with what `plan` checks, taking what plan reads from GitHub
+/// from the flags instead. Reads no credentials, so it runs anywhere the files are.
 fn lint(args: LintArgs) -> Result<ExitCode> {
+    let context = lint::Context {
+        owned_by_org: args.owner_type.map(|t| matches!(t, cli::OwnerType::Org)),
+        visibility: args.visibility.map(cli::Visibility::as_str),
+        strict: args.strict,
+    };
     let mut reports = Vec::new();
     for path in &args.paths {
-        let text = read_config(path)?;
-        let mut diagnostics = Diagnostics::new(validate::lint(&text));
-        diagnostics.file = Some(path.clone());
-        reports.push(diagnostics);
+        let mut report = lint::run(&read_config(path)?, &context);
+        report.diagnostics.file = Some(path.clone());
+        reports.push(report);
     }
-    let failed = reports.iter().any(|d| !d.diagnostics.is_empty());
+    let failed = reports.iter().any(lint::Report::failed);
 
     if args.json {
-        out(&format!(
-            "{}
-",
-            serde_json::to_string_pretty(&reports)?
-        ))?;
+        out(&format!("{}\n", serde_json::to_string_pretty(&reports)?))?;
     } else {
-        for diagnostics in reports.iter().filter(|d| !d.diagnostics.is_empty()) {
-            note(&format!(
-                "{diagnostics}
-"
-            ));
+        for (path, report) in args.paths.iter().zip(&reports) {
+            if !report.diagnostics.diagnostics.is_empty() {
+                note(&format!("{}\n", report.diagnostics));
+            }
+            for skipped in &report.skipped {
+                note(&format!("note: {}: skipped {skipped}\n", path.display()));
+            }
         }
     }
 

@@ -140,6 +140,19 @@ pub fn in_scope(path: &str, scope: &Scope) -> bool {
 
 /// The errors --strict raises for unwritten settings.
 pub fn strict(paths: &[String]) -> Vec<Diagnostic> {
+    unwritten(paths, |message| {
+        Diagnostic::error(Code::UndeclaredSetting, message)
+    })
+}
+
+/// The warnings `lint` reports for unwritten settings without --strict.
+pub fn warnings(paths: &[String]) -> Vec<Diagnostic> {
+    unwritten(paths, |message| {
+        Diagnostic::warning(Code::UnwrittenSetting, message)
+    })
+}
+
+fn unwritten(paths: &[String], diagnostic: fn(String) -> Diagnostic) -> Vec<Diagnostic> {
     paths
         .iter()
         .map(|path| {
@@ -156,10 +169,9 @@ pub fn strict(paths: &[String]) -> Vec<Diagnostic> {
                 Some(_) => "write `true` or `false`",
                 None => "write it out",
             };
-            Diagnostic::error(
-                Code::UndeclaredSetting,
-                format!("{path} is left unwritten, so plan keeps its current value"),
-            )
+            diagnostic(format!(
+                "{path} is left unwritten, so plan keeps its current value"
+            ))
             .at(path)
             .help(format!(
                 "{what}, or list it in meta.unmanaged to leave it unchanged on purpose"

@@ -94,6 +94,8 @@ codes! {
     ForkPrApprovalNotAllowed = "E0504",
     ForkPrApprovalOnPrivate = "E0505",
     ClaimKeysNeedCustomTemplate = "E0506",
+    // W01xx: lints on repository-wide settings. Only `lint` reports them
+    UnwrittenSetting = "W0101",
 }
 
 impl Serialize for Code {
@@ -106,6 +108,7 @@ impl Serialize for Code {
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Error,
+    Warning,
 }
 
 /// Whether a suggested fix may be applied as-is. Modeled after rustc's Applicability.
@@ -163,9 +166,17 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn error(code: Code, message: impl Into<String>) -> Self {
+        Self::new(code, Severity::Error, message)
+    }
+
+    pub fn warning(code: Code, message: impl Into<String>) -> Self {
+        Self::new(code, Severity::Warning, message)
+    }
+
+    fn new(code: Code, severity: Severity, message: impl Into<String>) -> Self {
         Self {
             code,
-            severity: Severity::Error,
+            severity,
             message: message.into(),
             path: None,
             help: None,
@@ -197,7 +208,11 @@ impl Diagnostic {
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "error[{}]: {}", self.code.as_str(), self.message)?;
+        let severity = match self.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        };
+        write!(f, "{severity}[{}]: {}", self.code.as_str(), self.message)?;
         if let Some(path) = &self.path {
             write!(f, "\n  --> {path}")?;
         }
@@ -247,9 +262,23 @@ impl fmt::Display for Diagnostics {
         for diagnostic in &self.diagnostics {
             write!(f, "{diagnostic}\n\n")?;
         }
-        let n = self.diagnostics.len();
-        let plural = if n == 1 { "" } else { "s" };
-        write!(f, "error: aborting due to {n} error{plural}")?;
+        let plural = |n| if n == 1 { "" } else { "s" };
+        let warnings = self
+            .diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, Severity::Warning))
+            .count();
+        let errors = self.diagnostics.len() - warnings;
+        match (errors, warnings) {
+            (0, w) => write!(f, "warning: {w} warning{} emitted", plural(w))?,
+            (e, 0) => write!(f, "error: aborting due to {e} error{}", plural(e))?,
+            (e, w) => write!(
+                f,
+                "error: aborting due to {e} error{}; {w} warning{} emitted",
+                plural(e),
+                plural(w)
+            )?,
+        }
         if let Some(file) = &self.file {
             write!(f, " in {}", file.display())?;
         }

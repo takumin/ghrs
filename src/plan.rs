@@ -196,8 +196,13 @@ pub async fn run(
     let repo = gh.get(&format!("/repos/{target}")).await?;
     let owned_by_org = repo["owner"]["type"] == "Organization";
     let visibility = repo["visibility"].as_str().unwrap_or_default();
-    let mut errors =
-        validate::check_context(config, &target.owner, owned_by_org, visibility, &scope);
+    let mut errors = validate::check_context(
+        config,
+        Some(&target.owner),
+        owned_by_org,
+        visibility,
+        &scope,
+    );
     let public = validate::visibility(config, visibility, &scope) == "public";
     let (mut undeclared, unused) = undeclared::find(config, owned_by_org, public);
     undeclared.retain(|path| undeclared::in_scope(path, &scope));

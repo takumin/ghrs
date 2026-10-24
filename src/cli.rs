@@ -194,9 +194,45 @@ pub struct LintArgs {
     #[arg(value_name = "PATH", default_value = ".ghrs.toml")]
     pub paths: Vec<PathBuf>,
 
+    /// Who owns the repositories, for the checks that depend on it (skipped if omitted)
+    #[arg(long, value_name = "TYPE")]
+    pub owner_type: Option<OwnerType>,
+
+    /// Current visibility of the repositories (repository.visibility takes precedence; the checks
+    /// that depend on it are skipped if neither is given)
+    #[arg(long, value_name = "VISIBILITY")]
+    pub visibility: Option<Visibility>,
+
+    /// Fail when a setting ghrs knows is neither written nor listed in meta.unmanaged
+    #[arg(long)]
+    pub strict: bool,
+
     /// Output JSON
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum OwnerType {
+    /// An Organization
+    Org,
+    /// A personal account
+    User,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum Visibility {
+    Public,
+    Private,
+}
+
+impl Visibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Visibility::Public => "public",
+            Visibility::Private => "private",
+        }
+    }
 }
 
 #[derive(Args)]

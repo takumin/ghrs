@@ -82,11 +82,14 @@ Without a terminal, `apply` refuses to proceed unless `--yes` is given.
 `drift` also takes `--strict`.
 Like `plan` without `--prune`, `drift` does not count undeclared rulesets, collaborators, and teams as a difference.
 
-`lint` runs the validation `plan` does before its first API call, so it needs neither credentials nor network access, and suits pre-commit hooks and CI.
-It validates each file given (default: `.ghrs.toml`), reports the errors of every file, and exits with status 1 when any file has one.
-Checks that depend on the repository on GitHub, such as whether the owner is an organization, are left to `plan`.
+`lint` runs the validation `plan` does without calling the GitHub API, so it needs neither credentials nor network access, and suits pre-commit hooks and CI.
+It validates each file given (default: `.ghrs.toml`), reports the diagnostics of every file, and exits with status 1 when any file has an error.
+What `plan` reads from GitHub comes from flags instead: `--owner-type org|user` says who owns the repository, and `--visibility public|private` gives its current visibility, which `repository.visibility` overrides as in `plan`.
+Without them, the checks that depend on them are skipped with a note, and `meta.owner` is needed to check that the owner is not declared as a collaborator.
 `integration = "self"` is accepted, since the credential is not known.
-With `--json`, it writes an array with the file and its diagnostics for each file.
+Unwritten settings are reported as warnings (`W0101`), which do not change the exit status; `--strict` turns them into errors as in `plan`.
+When the owner type or the visibility is not known, a setting is reported as unwritten only when it is a setting either way, and a `meta.unmanaged` entry is reported as covering nothing only when it covers nothing either way.
+With `--json`, it writes an array with the file, its diagnostics, and the checks it skipped, for each file.
 
 ## JSON Schema
 

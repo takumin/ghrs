@@ -51,15 +51,6 @@ pub fn parse(text: &str) -> Result<Config, Diagnostics> {
     serde_path_to_error::deserialize(de).map_err(|err| one(deserialize_error(err, text)))
 }
 
-/// Every diagnostic `parse` and `check` find in the declaration file, for `lint`. Credentials are
-/// not known offline, so `integration = "self"` is accepted as App authentication would.
-pub fn lint(text: &str) -> Vec<Diagnostic> {
-    match parse(text) {
-        Ok(config) => check(&config, true),
-        Err(diagnostics) => diagnostics.diagnostics,
-    }
-}
-
 fn deserialize_error(err: serde_path_to_error::Error<toml::de::Error>, text: &str) -> Diagnostic {
     use serde_path_to_error::Segment;
     let path = key_path(err.path());
@@ -442,9 +433,11 @@ fn check_permission(
 
 /// Validation performed once the target repository's owner and current visibility are known.
 /// Runs before name resolution so API calls for resolution are not wasted.
+///
+/// `owner` is `None` when it is not known, which skips the checks that compare logins with it.
 pub fn check_context(
     config: &Config,
-    owner: &str,
+    owner: Option<&str>,
     owned_by_org: bool,
     current_visibility: &str,
     scope: &Scope,
@@ -458,7 +451,7 @@ pub fn check_context(
     };
     for c in collaborators {
         let path = entry_path("collaborator", &c.login);
-        if c.login.eq_ignore_ascii_case(owner) {
+        if owner.is_some_and(|owner| c.login.eq_ignore_ascii_case(owner)) {
             // The owner is always admin, so removing it changes nothing on the GitHub side
             errors.push(
                 Diagnostic::error(
@@ -1101,19 +1094,6 @@ checks = [{ context = "test" }, { context = "build", integration = "github-actio
     }
 
     #[test]
-    fn lint_reports_parse_and_check_errors() {
-        let codes = |toml: &str| lint(toml).iter().map(|d| d.code).collect::<Vec<_>>();
-        assert_eq!(codes("[repository]\nhas_issue = true"), [Code::UnknownKey]);
-        assert_eq!(
-            codes("[repository]\nvisibility = \"internal\""),
-            [Code::VisibilityNotAllowed]
-        );
-        // The credential is unknown offline, so `self` is not rejected
-        let toml = ruleset("bypass_actors = [{ type = \"integration\", name = \"self\" }]");
-        assert!(codes(&toml).is_empty());
-    }
-
-    #[test]
     fn rejects_unknown_keys() {
         assert!(toml::from_str::<Config>("[repository]\nhas_issue = true").is_err());
     }
@@ -1393,10 +1373,10 @@ name = "owner"
         let toml = ruleset("[[ruleset.r.bypass_actors]]\ntype = \"team\"\nname = \"maintainers\"");
         let config: Config = toml::from_str(&toml).unwrap();
         assert_eq!(
-            check_context(&config, "takumin", false, "public", &ALL).len(),
+            check_context(&config, Some("takumin"), false, "public", &ALL).len(),
             1
         );
-        assert!(check_context(&config, "takumin", true, "public", &ALL).is_empty());
+        assert!(check_context(&config, Some("takumin"), true, "public", &ALL).is_empty());
     }
 
     #[test]
@@ -1404,10 +1384,10 @@ name = "owner"
         let toml = ruleset("[[ruleset.r.bypass_actors]]\ntype = \"organization_admin\"");
         let config: Config = toml::from_str(&toml).unwrap();
         assert_eq!(
-            check_context(&config, "takumin", false, "public", &ALL).len(),
+            check_context(&config, Some("takumin"), false, "public", &ALL).len(),
             1
         );
-        assert!(check_context(&config, "takumin", true, "public", &ALL).is_empty());
+        assert!(check_context(&config, Some("takumin"), true, "public", &ALL).is_empty());
     }
 
     #[test]
@@ -1533,7 +1513,7 @@ name = "owner"
     fn fork_pr_approval_needs_a_public_repository() {
         let codes = |toml: &str, visibility: &str, scope: &Scope| {
             let config: Config = toml::from_str(toml).unwrap();
-            check_context(&config, "takumin", false, visibility, scope)
+            check_context(&config, Some("takumin"), false, visibility, scope)
                 .iter()
                 .map(|d| d.code)
                 .collect::<Vec<_>>()
@@ -1585,12 +1565,12 @@ permission = "maintain"
         let config: Config = toml::from_str(toml).unwrap();
         // Owner declaration, non-push on a personal repository, team on a personal repository
         assert_eq!(
-            check_context(&config, "takumin", false, "public", &ACCESS).len(),
+            check_context(&config, Some("takumin"), false, "public", &ACCESS).len(),
             3
         );
         // For an Organization, only the owner declaration remains
         assert_eq!(
-            check_context(&config, "takumin", true, "public", &ACCESS).len(),
+            check_context(&config, Some("takumin"), true, "public", &ACCESS).len(),
             1
         );
     }
@@ -1600,10 +1580,10 @@ permission = "maintain"
         let toml = ruleset("[ruleset.r.rules]\nmerge_queue = true\nbranch_name_pattern = false");
         let config: Config = toml::from_str(&toml).unwrap();
         assert_eq!(
-            check_context(&config, "takumin", false, "public", &ALL).len(),
+            check_context(&config, Some("takumin"), false, "public", &ALL).len(),
             1
         );
-        assert!(check_context(&config, "takumin", true, "public", &ALL).is_empty());
+        assert!(check_context(&config, Some("takumin"), true, "public", &ALL).is_empty());
     }
 
     /// The key is told apart from the path even when it is quoted and holds a `.`
@@ -1707,16 +1687,16 @@ permission = "maintain"
 
         let config: Config = toml::from_str(&ok).unwrap();
         assert_eq!(
-            check_context(&config, "takumin", false, "public", &ALL).len(),
+            check_context(&config, Some("takumin"), false, "public", &ALL).len(),
             2
         );
-        assert!(check_context(&config, "takumin", true, "public", &ALL).is_empty());
+        assert!(check_context(&config, Some("takumin"), true, "public", &ALL).is_empty());
 
         // A team in dismissal_restriction gets only the error that removes the whole table
         let team =
             pr("dismissal_restriction = { allowed_actors = [{ type = \"team\", name = \"t\" }] }");
         let config: Config = toml::from_str(&team).unwrap();
-        let codes: Vec<Code> = check_context(&config, "takumin", false, "public", &ALL)
+        let codes: Vec<Code> = check_context(&config, Some("takumin"), false, "public", &ALL)
             .iter()
             .map(|d| d.code)
             .collect();
@@ -1757,7 +1737,7 @@ permission = "maintain"
             ruleset("[[ruleset.r.bypass_actors]]\ntype = \"organization_admin\"")
         );
         let config: Config = toml::from_str(&toml).unwrap();
-        assert!(check_context(&config, "takumin", false, "public", &REPOSITORY).is_empty());
+        assert!(check_context(&config, Some("takumin"), false, "public", &REPOSITORY).is_empty());
 
         // The declared visibility is not applied, so the current one decides
         let rulesets = Scope {
@@ -1767,7 +1747,7 @@ permission = "maintain"
             collaborators: false,
             teams: false,
         };
-        let codes: Vec<Code> = check_context(&config, "takumin", false, "private", &rulesets)
+        let codes: Vec<Code> = check_context(&config, Some("takumin"), false, "private", &rulesets)
             .iter()
             .map(|d| d.code)
             .collect();
@@ -1781,17 +1761,17 @@ permission = "maintain"
     fn rejects_rulesets_on_private_repository() {
         let config: Config = toml::from_str(&ruleset("")).unwrap();
         assert_eq!(
-            check_context(&config, "takumin", false, "private", &ALL).len(),
+            check_context(&config, Some("takumin"), false, "private", &ALL).len(),
             1
         );
-        assert!(check_context(&config, "takumin", false, "private", &REPOSITORY).is_empty());
+        assert!(check_context(&config, Some("takumin"), false, "private", &REPOSITORY).is_empty());
 
         let public: Config = toml::from_str(&format!(
             "[repository]\nvisibility = \"public\"\n{}",
             ruleset("")
         ))
         .unwrap();
-        assert!(check_context(&public, "takumin", false, "private", &ALL).is_empty());
+        assert!(check_context(&public, Some("takumin"), false, "private", &ALL).is_empty());
     }
 
     #[test]
@@ -1801,7 +1781,7 @@ permission = "maintain"
             [[ruleset.r.bypass_actors]]\ntype = \"organization_admin\"",
         );
         let config: Config = toml::from_str(&toml).unwrap();
-        let errors = check_context(&config, "takumin", false, "public", &ALL);
+        let errors = check_context(&config, Some("takumin"), false, "public", &ALL);
         assert_eq!(errors.len(), 1);
         let d = &errors[0];
         assert_eq!(d.code, Code::OrganizationAdminOnPersonal);
