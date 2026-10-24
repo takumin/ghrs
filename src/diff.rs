@@ -12,6 +12,7 @@ use crate::model::Repository;
 use crate::resolve::Directory;
 use crate::schema::{
     ACTORS_WITHOUT_ID, actor_type_to_toml, for_each_review_actor, review_actor_type_to_toml,
+    rule_to_api, rule_to_toml,
 };
 use crate::state::{Actor, RulesetState};
 
@@ -224,9 +225,10 @@ fn ruleset(
     if let Some(have) = have {
         rule_names.extend(have.rules.keys().filter(|k| !want.rules.contains_key(*k)));
     }
-    rule_names.sort();
+    // Shown in the order of the names the declaration uses
+    rule_names.sort_by_key(|rule| rule_to_toml(rule));
     for rule in rule_names {
-        let path = format!("rules.{rule}");
+        let path = format!("rules.{}", rule_to_toml(rule));
         let before = have.and_then(|h| h.rules.get(rule));
         let after = want.rules.get(rule);
         match (before, after) {
@@ -269,7 +271,9 @@ fn ruleset(
                 .iter()
                 // A rule the ruleset does not have yet only adds protection, whatever its
                 // parameters
-                .filter(|f| rule_of(&f.path).is_none_or(|rule| have.rules.contains_key(rule)))
+                .filter(|f| {
+                    rule_of(&f.path).is_none_or(|rule| have.rules.contains_key(rule_to_api(rule)))
+                })
                 .filter_map(weakening)
                 .map(|message| format!("ruleset \"{}\": {message}", want.name)),
         );
@@ -420,7 +424,10 @@ const WEAKENING_PARAMS: &[(&str, Weakens)] = &[
         "rules.pull_request.dismissal_restriction.enabled",
         Weakens::Disable,
     ),
-    ("rules.required_status_checks.strict", Weakens::Disable),
+    (
+        "rules.required_status_checks.require_up_to_date",
+        Weakens::Disable,
+    ),
     (
         "rules.required_status_checks.do_not_enforce_on_create",
         Weakens::Enable,
@@ -431,7 +438,7 @@ const WEAKENING_PARAMS: &[(&str, Weakens)] = &[
         Weakens::Remove,
     ),
     (
-        "rules.update.update_allows_fetch_and_merge",
+        "rules.restrict_updates.update_allows_fetch_and_merge",
         Weakens::Enable,
     ),
     ("rules.workflows.do_not_enforce_on_create", Weakens::Enable),
@@ -512,10 +519,10 @@ fn rule_of(path: &str) -> Option<&str> {
     path.strip_prefix("rules.")?.split('.').next()
 }
 
-/// Only `required_status_checks` uses short key names on the TOML side.
+/// Only `required_status_checks` uses its own key names on the TOML side.
 fn display_key<'a>(rule: &str, key: &'a str) -> &'a str {
     match (rule, key) {
-        ("required_status_checks", "strict_required_status_checks_policy") => "strict",
+        ("required_status_checks", "strict_required_status_checks_policy") => "require_up_to_date",
         ("required_status_checks", "required_status_checks") => "checks",
         _ => key,
     }
@@ -814,12 +821,12 @@ mod tests {
                     lose protection",
                 "ruleset \"r\": removes \"refs/heads/release\" from conditions.include",
                 "ruleset \"r\": adds \"refs/heads/tmp\" to conditions.exclude",
-                "ruleset \"r\": removes rule deletion",
                 "ruleset \"r\": changes rules.pull_request.require_code_owner_review from true \
                     to false",
                 "ruleset \"r\": changes rules.pull_request.required_approving_review_count from \
                     2 to 1",
                 "ruleset \"r\": removes an entry from rules.required_status_checks.checks",
+                "ruleset \"r\": removes rule restrict_deletions",
             ]
         );
     }
@@ -890,8 +897,8 @@ mod tests {
         assert_eq!(
             changes[0].destructive,
             [
-                "ruleset \"r\": changes rules.update.update_allows_fetch_and_merge from unset to \
-                    true"
+                "ruleset \"r\": changes rules.restrict_updates.update_allows_fetch_and_merge from \
+                    unset to true"
             ]
         );
     }

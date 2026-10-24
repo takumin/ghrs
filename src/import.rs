@@ -16,6 +16,7 @@ use crate::repo::RepoRef;
 use crate::resolve;
 use crate::schema::{
     PERMISSIONS, VISIBILITIES, for_each_review_actor, review_actor_type_to_toml, role_name,
+    rule_to_toml,
 };
 use crate::validate;
 
@@ -390,7 +391,7 @@ impl Importer {
                 }
                 (_, Some(params)) => self.plain_params(ruleset, &rule_type, target, params)?,
             };
-            out.insert(rule_type, value);
+            out.insert(rule_to_toml(&rule_type).to_string(), value);
         }
         serde_json::from_value(Json::Object(out))
             .with_context(|| format!("ruleset \"{ruleset}\": cannot read the rules"))
@@ -474,7 +475,7 @@ impl Importer {
         let mut out = Map::new();
         for (key, value) in params.as_object().into_iter().flatten() {
             let key = match key.as_str() {
-                "strict_required_status_checks_policy" => "strict",
+                "strict_required_status_checks_policy" => "require_up_to_date",
                 "do_not_enforce_on_create" => "do_not_enforce_on_create",
                 "required_status_checks" => continue,
                 _ => {
@@ -495,12 +496,13 @@ impl Importer {
         target: &str,
         params: &Json,
     ) -> Result<Json> {
+        let rule = rule_to_toml(rule_type);
         let obj = params.as_object().with_context(|| {
-            format!("ruleset \"{ruleset}\": parameters of rule \"{rule_type}\" are not an object")
+            format!("ruleset \"{ruleset}\": parameters of rule \"{rule}\" are not an object")
         })?;
         let (out, dropped) = known_params(rule_type, obj).map_err(|key| {
             anyhow::anyhow!(
-                "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{rule_type}\" is a \
+                "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{rule}\" is a \
                 numeric ID; it cannot be imported until name resolution for it is implemented"
             )
         })?;
@@ -611,8 +613,9 @@ fn unsupported_param(ruleset: &str, rule: &str, key: &str) -> String {
         "plan keeps it as is"
     };
     format!(
-        "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{rule}\" is not supported; left it \
-        out of the declaration, and {kept}"
+        "ruleset \"{ruleset}\": parameter \"{key}\" of rule \"{}\" is not supported; left it \
+        out of the declaration, and {kept}",
+        rule_to_toml(rule)
     )
 }
 
@@ -731,7 +734,7 @@ name = "admin"
 type = "deploy_key"
 
 [ruleset.main.rules.required_status_checks]
-strict = true
+require_up_to_date = true
 checks = [{ context = "CI", integration = "github-actions" }]
 
 [ruleset.main.rules.pull_request]

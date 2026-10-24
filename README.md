@@ -129,14 +129,14 @@ exclude = []
 
 # Rules not listed here are disabled.
 [ruleset.main.rules]
-deletion = true
-non_fast_forward = true
+restrict_deletions = true   # only bypass actors can delete the branch
+block_force_pushes = true
 
 [ruleset.main.rules.pull_request]
 required_approving_review_count = 1
 
 [ruleset.main.rules.required_status_checks]
-strict = true
+require_up_to_date = true   # the branch must be up to date before merging
 checks = [{ context = "test" }, { context = "build", integration = "github-actions" }]
 
 [collaborator.octocat]   # keyed by login
@@ -148,6 +148,10 @@ permission = "maintain"
 
 Actors are written by name (App slug, team slug, user login, role name), and ghrs resolves them to IDs.
 When running as a GitHub App, `integration = "self"` refers to that App.
+
+Rules and parameters take GitHub's REST API names, except where those read ambiguously.
+`creation`, `update`, `deletion`, and `non_fast_forward` are written `restrict_creations`, `restrict_updates`, `restrict_deletions`, and `block_force_pushes` as in the web UI, and `strict_required_status_checks_policy` is written `require_up_to_date`.
+The JSON Schema gives the API's name in `x-github-api-name`.
 
 Rule parameters not written in a rule's table keep their current values.
 Rules, parameters, and bypass actor types that ghrs does not know yet (for example, ones GitHub added recently) cannot be declared; `import` leaves them out with a warning, and `plan` keeps them at their current values instead of removing them.

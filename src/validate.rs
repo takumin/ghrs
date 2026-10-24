@@ -9,8 +9,8 @@ use crate::model::{BypassActor, Config, ReviewActor, Rule, Ruleset};
 use crate::plan::Scope;
 use crate::schema::{
     ACTORS_WITHOUT_ID, BRANCH_ONLY_RULES, BYPASS_MODES, ENFORCEMENTS, MAX_RULESETS, ORG_ONLY_RULES,
-    PERMISSIONS, PUSH_RULES, REPOSITORY_ROLES, ROLES_WITHOUT_WRITE, TAG_ONLY_RULES, TARGETS,
-    VISIBILITIES, actor_type_names, actor_type_to_api, ref_patterns, role_id,
+    PERMISSIONS, PUSH_RULES, REPOSITORY_ROLES, ROLES_WITHOUT_WRITE, RULE_NAMES, TAG_ONLY_RULES,
+    TARGETS, VISIBILITIES, actor_type_names, actor_type_to_api, ref_patterns, role_id, rule_to_api,
 };
 
 fn allowed(values: &[&str]) -> String {
@@ -85,6 +85,15 @@ fn deserialize_error(err: serde_path_to_error::Error<toml::de::Error>, text: &st
         .fix(Applicability::MaybeIncorrect, remove(&path));
     }
     let d = Diagnostic::error(Code::UnknownKey, format!("unknown key `{key}`")).at(&path);
+    if let Some(to) = renamed(&keys) {
+        return d.help(format!("`{key}` is written `{to}`")).fix(
+            Applicability::MachineApplicable,
+            Edit::Rename {
+                path: path.clone(),
+                to: to.to_string(),
+            },
+        );
+    }
     match similar(key, &expected) {
         Some(to) => d.help(format!("did you mean `{to}`?")).fix(
             Applicability::MaybeIncorrect,
@@ -95,6 +104,26 @@ fn deserialize_error(err: serde_path_to_error::Error<toml::de::Error>, text: &st
         ),
         None if expected.is_empty() => d.help("this table takes no keys"),
         None => d.help(format!("allowed keys: {}", expected.join(" / "))),
+    }
+}
+
+/// The name of a key that ghrs writes differently from the API, or wrote differently before,
+/// when `keys` is written by that other name. `similar` would not find it
+/// (`deletion` -> `restrict_deletions`).
+fn renamed(keys: &[&str]) -> Option<&'static str> {
+    match keys {
+        ["ruleset", _, "rules", rule] => RULE_NAMES
+            .iter()
+            .find(|(api, _)| api == rule)
+            .map(|(_, toml)| *toml),
+        [
+            "ruleset",
+            _,
+            "rules",
+            "required_status_checks",
+            "strict" | "strict_required_status_checks_policy",
+        ] => Some("require_up_to_date"),
+        _ => None,
     }
 }
 
@@ -368,7 +397,7 @@ pub fn check_context(
         for ruleset in &config.rulesets {
             let base = entry_path("ruleset", &ruleset.name);
             for (rule, value) in &ruleset.rules.entries() {
-                if ORG_ONLY_RULES.contains(&rule.as_str()) && value.as_bool() != Some(false) {
+                if ORG_ONLY_RULES.contains(&rule_to_api(rule)) && value.as_bool() != Some(false) {
                     let path = format!("{base}.rules.{rule}");
                     errors.push(
                         Diagnostic::error(
@@ -612,9 +641,9 @@ fn check_ruleset(base: &str, ruleset: &Ruleset, app_auth: bool, errors: &mut Vec
         if value.as_bool() == Some(false) {
             continue;
         }
-        let only = if BRANCH_ONLY_RULES.contains(&rule.as_str()) {
+        let only = if BRANCH_ONLY_RULES.contains(&rule_to_api(rule)) {
             Some("branch")
-        } else if TAG_ONLY_RULES.contains(&rule.as_str()) {
+        } else if TAG_ONLY_RULES.contains(&rule_to_api(rule)) {
             Some("tag")
         } else {
             None
@@ -911,11 +940,11 @@ mode = "pull_request"
 type = "organization_admin"
 
 [ruleset.r.rules]
-deletion = true
-update = true
+restrict_deletions = true
+restrict_updates = true
 
 [ruleset.r.rules.required_status_checks]
-strict = true
+require_up_to_date = true
 checks = [{ context = "test" }, { context = "build", integration = "github-actions" }]
 "#,
         );
@@ -950,10 +979,10 @@ checks = [{ context = "test" }, { context = "build", integration = "github-actio
             Some(("repository.allow_rebase", "allow_rebase_merge"))
         );
 
-        let d = parse_error(&ruleset("[ruleset.r.rules]\nnon_fast_foward = true"));
+        let d = parse_error(&ruleset("[ruleset.r.rules]\nblock_force_push = true"));
         assert_eq!(
             rename(&d),
-            Some(("ruleset.r.rules.non_fast_foward", "non_fast_forward"))
+            Some(("ruleset.r.rules.block_force_push", "block_force_pushes"))
         );
 
         let d = parse_error(&ruleset(
@@ -967,6 +996,42 @@ checks = [{ context = "test" }, { context = "build", integration = "github-actio
             ))
         );
         assert_eq!(d.fix.unwrap().applicability, Applicability::MaybeIncorrect);
+    }
+
+    /// The API's names, and the names ghrs used before, are renamed without guessing
+    #[test]
+    fn renames_keys_written_by_another_name() {
+        for (body, path, to) in [
+            (
+                "[ruleset.r.rules]\ndeletion = true",
+                "ruleset.r.rules.deletion",
+                "restrict_deletions",
+            ),
+            (
+                "[ruleset.r.rules]\nnon_fast_forward = true",
+                "ruleset.r.rules.non_fast_forward",
+                "block_force_pushes",
+            ),
+            (
+                "[ruleset.r.rules.required_status_checks]\nstrict = true",
+                "ruleset.r.rules.required_status_checks.strict",
+                "require_up_to_date",
+            ),
+            (
+                "[ruleset.r.rules.required_status_checks]\n\
+                strict_required_status_checks_policy = true",
+                "ruleset.r.rules.required_status_checks.strict_required_status_checks_policy",
+                "require_up_to_date",
+            ),
+        ] {
+            let d = parse_error(&ruleset(body));
+            assert_eq!(d.code, Code::UnknownKey);
+            assert_eq!(rename(&d), Some((path, to)), "{body}");
+            assert_eq!(
+                d.fix.unwrap().applicability,
+                Applicability::MachineApplicable
+            );
+        }
     }
 
     #[test]
@@ -986,7 +1051,7 @@ checks = [{ context = "test" }, { context = "build", integration = "github-actio
         );
         // An unknown rule refers to the list of all rules
         assert_eq!(
-            reference(&ruleset("[ruleset.r.rules]\nnon_fast_foward = true")),
+            reference(&ruleset("[ruleset.r.rules]\nblock_force_push = true")),
             schema("repository-rule")
         );
         assert_eq!(reference("[repository]\nallow_rebase = false"), None);
@@ -1017,9 +1082,12 @@ checks = [{ context = "test" }, { context = "build", integration = "github-actio
 
     #[test]
     fn reports_values_of_the_wrong_type() {
-        let d = parse_error(&ruleset("[ruleset.r.rules]\ndeletion = 1"));
+        let d = parse_error(&ruleset("[ruleset.r.rules]\nrestrict_deletions = 1"));
         assert_eq!(d.code, Code::InvalidValue);
-        assert_eq!(d.path.as_deref(), Some("ruleset.r.rules.deletion"));
+        assert_eq!(
+            d.path.as_deref(),
+            Some("ruleset.r.rules.restrict_deletions")
+        );
         assert!(d.message.contains("line 5"), "{}", d.message);
 
         let d = parse_error(&ruleset("[ruleset.r.rules]\npull_request = \"yes\""));
