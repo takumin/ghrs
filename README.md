@@ -82,6 +82,7 @@ Like `plan` without `--prune`, `drift` does not count undeclared rulesets, colla
 
 `ghrs schema` writes the JSON Schema of the declaration file, which editors and coding agents can use to find the allowed keys and values.
 `import --schema` references it from the first line of the output in the form [taplo](https://taplo.tamasfe.dev/) reads.
+The same schema is committed as [`schema/ghrs.schema.json`](schema/ghrs.schema.json).
 
 ```sh
 ghrs schema --out ghrs.schema.json
@@ -201,10 +202,14 @@ The toolchain is managed with [aqua](https://aquaproj.github.io/) and [Task](htt
 
 ```sh
 aqua install
-task          # format, lint, dependency policy check, test, doc, build
+task          # format, schema, lint, dependency policy check, test, doc, build
 task audit    # the policy check and the RustSec advisory scan
 task test
+task schema   # regenerate schema/ghrs.schema.json
 ```
+
+`schema/ghrs.schema.json` must match the code, since `import` references it at each release tag.
+CI regenerates it on pull requests and commits the difference.
 
 ## License
 

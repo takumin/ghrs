@@ -1,0 +1,35 @@
+---
+# https://taskfile.dev
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  setup:
+    taskfile: setup.task.yml
+    internal: true
+
+tasks:
+  default:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - task: generate
+
+  generate:
+    desc: '{{.TASK}}'
+    label: schema:generate
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: setup:test
+    sources:
+    - 'Cargo.toml'
+    - 'Cargo.lock'
+    - 'src/**/*.rs'
+    - 'tasks/schema.task.yml'
+    - 'rust-toolchain.toml'
+    generates:
+    - schema/ghrs.schema.json
+    cmds:
+    # `import` references this file at the tag of each version, so it must match the code
+    - cargo run --frozen --quiet -- schema --out schema/ghrs.schema.json

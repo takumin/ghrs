@@ -1,0 +1,925 @@
+{
+  "$defs": {
+    "BypassActor": {
+      "additionalProperties": false,
+      "description": "An actor that may bypass the ruleset, written by name. ghrs resolves the name to the API's\n`actor_id`.",
+      "properties": {
+        "mode": {
+          "default": "always",
+          "description": "`pull_request` is for branch rulesets only, and not for `deploy_key`",
+          "enum": [
+            "always",
+            "pull_request",
+            "exempt"
+          ],
+          "type": "string",
+          "x-github-api-name": "bypass_mode"
+        },
+        "name": {
+          "description": "App slug (`self` for the App ghrs runs as), team slug, or role name (`maintain`, `write`\nor `admin`). Only `integration` accepts a numeric App ID, for private Apps of someone else.\nOmitted for `organization_admin` and `deploy_key`, which refer to the whole type and have\nno ID.",
+          "type": "string",
+          "x-github-api-name": "actor_id"
+        },
+        "type": {
+          "description": "`team` and `organization_admin` are Organization-owned repositories only",
+          "enum": [
+            "integration",
+            "organization_admin",
+            "repository_role",
+            "team",
+            "deploy_key"
+          ],
+          "type": "string",
+          "x-github-api-name": "actor_type"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object",
+      "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-ruleset-bypass-actor"
+    },
+    "CodeCoverage": {
+      "additionalProperties": false,
+      "description": "Coverage in percent",
+      "properties": {
+        "max_coverage_drop": {
+          "description": "Pull requests whose line coverage drops more than this many percentage points from the\ndefault branch are blocked",
+          "format": "double",
+          "type": "number"
+        },
+        "minimum_coverage": {
+          "description": "Pull requests with line coverage below this are blocked",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "CodeQuality": {
+      "additionalProperties": false,
+      "properties": {
+        "severity": {
+          "description": "Lowest severity of code quality findings that must be resolved before merging",
+          "enum": [
+            "errors",
+            "warnings",
+            "notes",
+            "all"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "CodeScanning": {
+      "additionalProperties": false,
+      "properties": {
+        "code_scanning_tools": {
+          "description": "Tools that must provide code scanning results",
+          "items": {
+            "$ref": "#/$defs/CodeScanningTool"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "CodeScanningTool": {
+      "additionalProperties": false,
+      "properties": {
+        "alerts_threshold": {
+          "description": "Alert severity at which results block a ref update",
+          "enum": [
+            "none",
+            "errors",
+            "errors_and_warnings",
+            "all"
+          ],
+          "type": "string"
+        },
+        "security_alerts_threshold": {
+          "description": "Security severity at which results block a ref update",
+          "enum": [
+            "none",
+            "critical",
+            "high_or_higher",
+            "medium_or_higher",
+            "all"
+          ],
+          "type": "string"
+        },
+        "tool": {
+          "description": "Name of the code scanning tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alerts_threshold",
+        "security_alerts_threshold",
+        "tool"
+      ],
+      "type": "object",
+      "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-params-code-scanning-tool"
+    },
+    "Collaborator": {
+      "additionalProperties": false,
+      "description": "The repository owner cannot be declared. On a personal repository, only `push` is available.",
+      "properties": {
+        "permission": {
+          "description": "Repository role granted to the user",
+          "enum": [
+            "pull",
+            "triage",
+            "push",
+            "maintain",
+            "admin"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "permission"
+      ],
+      "type": "object"
+    },
+    "Conditions": {
+      "additionalProperties": false,
+      "description": "Refs the ruleset applies to (`conditions.ref_name` in the API). Patterns start with\n`refs/heads/` for branch rulesets and `refs/tags/` for tag rulesets, except `~ALL` and (branch\nrulesets only) `~DEFAULT_BRANCH`.",
+      "properties": {
+        "exclude": {
+          "default": [],
+          "description": "Ref patterns excluded even when `include` matches them (fnmatch syntax)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-github-api-name": "ref_name.exclude"
+        },
+        "include": {
+          "default": [],
+          "description": "Ref patterns the ruleset applies to (fnmatch syntax)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-github-api-name": "ref_name.include"
+        }
+      },
+      "type": "object",
+      "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-ruleset-conditions"
+    },
+    "CopilotCodeReview": {
+      "additionalProperties": false,
+      "properties": {
+        "review_draft_pull_requests": {
+          "description": "Copilot also reviews draft pull requests",
+          "type": "boolean"
+        },
+        "review_on_push": {
+          "description": "Copilot reviews each new push to a pull request",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "DismissalRestriction": {
+      "additionalProperties": false,
+      "description": "Organization-owned repositories only. `enabled` is required unless the ruleset already has\na restriction, whose keys not written here keep their current values",
+      "properties": {
+        "allowed_actors": {
+          "description": "Actors allowed to dismiss pull request reviews",
+          "items": {
+            "$ref": "#/$defs/ReviewActor"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "description": "Restricts review dismissal to `allowed_actors`",
+          "type": "boolean"
+        }
+      },
+      "type": "object",
+      "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-params-dismissal-restriction"
+    },
+    "MergeQueue": {
+      "additionalProperties": false,
+      "properties": {
+        "check_response_timeout_minutes": {
+          "description": "Minutes a required status check has to report a conclusion before it is assumed to\nhave failed",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "grouping_strategy": {
+          "description": "`ALLGREEN`: the merge commit for each pull request in a group must pass the required\nchecks. `HEADGREEN`: only the commit at the head of the group must pass them",
+          "enum": [
+            "ALLGREEN",
+            "HEADGREEN"
+          ],
+          "type": "string"
+        },
+        "max_entries_to_build": {
+          "description": "Number of queued pull requests requesting checks and workflow runs at the same time",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_entries_to_merge": {
+          "description": "Maximum number of pull requests merged together in a group",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "merge_method": {
+          "description": "Method used to merge queued pull requests",
+          "enum": [
+            "MERGE",
+            "SQUASH",
+            "REBASE"
+          ],
+          "type": "string"
+        },
+        "min_entries_to_merge": {
+          "description": "Minimum number of pull requests merged together in a group",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_entries_to_merge_wait_minutes": {
+          "description": "Minutes to wait for `min_entries_to_merge` after the first pull request is queued.\nAfter that, a smaller group is merged",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Meta": {
+      "additionalProperties": false,
+      "description": "The target repository. --repo takes precedence over it, and without either, the target is\ntaken from the git remote.",
+      "properties": {
+        "owner": {
+          "description": "User or Organization that owns the repository",
+          "type": "string"
+        },
+        "repo": {
+          "description": "Repository name, without the owner",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Pattern": {
+      "additionalProperties": false,
+      "description": "Parameters shared by the `*_pattern` rules.",
+      "properties": {
+        "name": {
+          "description": "How the rule appears in GitHub's settings",
+          "type": "string"
+        },
+        "negate": {
+          "description": "Fails the rule when the pattern matches, instead of when it does not",
+          "type": "boolean"
+        },
+        "operator": {
+          "description": "How `pattern` is compared with the value",
+          "enum": [
+            "starts_with",
+            "ends_with",
+            "contains",
+            "regex"
+          ],
+          "type": "string"
+        },
+        "pattern": {
+          "description": "The string or regular expression to match",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "PullRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_merge_methods": {
+          "description": "Merge methods allowed for pull requests. At least one is required",
+          "items": {
+            "enum": [
+              "merge",
+              "squash",
+              "rebase"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dismiss_stale_reviews_on_push": {
+          "description": "New reviewable commits dismiss previous approvals",
+          "type": "boolean"
+        },
+        "dismissal_restriction": {
+          "$ref": "#/$defs/DismissalRestriction",
+          "description": "Organization-owned repositories only"
+        },
+        "require_code_owner_review": {
+          "description": "Pull requests that modify files with a designated code owner need an approval from\none",
+          "type": "boolean"
+        },
+        "require_extra_approval_for_unattributed_changes": {
+          "description": "Requires one more approval than `required_approving_review_count` on pull requests\nCopilot opens under its own app identity, not on behalf of a person. No effect when zero\napprovals are required. GitHub enables it when omitted. Not in the REST API\ndescription; the meaning is from GitHub's ruleset docs (public preview)",
+          "type": "boolean",
+          "x-github-observed": true
+        },
+        "require_last_push_approval": {
+          "description": "The most recent reviewable push must be approved by someone other than its pusher",
+          "type": "boolean"
+        },
+        "required_approving_review_count": {
+          "description": "Number of approving reviews required before a pull request can be merged",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required_review_thread_resolution": {
+          "description": "All conversations on code must be resolved before a pull request can be merged",
+          "type": "boolean"
+        },
+        "required_reviewers": {
+          "description": "Teams that must review changes to matching files",
+          "items": {
+            "$ref": "#/$defs/RequiredReviewer"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Repository": {
+      "additionalProperties": false,
+      "description": "Repository settings, with the names of `PATCH /repos/{owner}/{repo}`. Only the fields that are\nwritten are compared. Unwritten fields are left untouched.",
+      "properties": {
+        "allow_auto_merge": {
+          "description": "Allows auto-merge on pull requests",
+          "type": "boolean"
+        },
+        "allow_merge_commit": {
+          "description": "Allows merging pull requests with a merge commit",
+          "type": "boolean"
+        },
+        "allow_rebase_merge": {
+          "description": "Allows rebase-merging pull requests",
+          "type": "boolean"
+        },
+        "allow_squash_merge": {
+          "description": "Allows squash-merging pull requests",
+          "type": "boolean"
+        },
+        "default_branch": {
+          "description": "Default branch. The branch must already exist",
+          "type": "string"
+        },
+        "delete_branch_on_merge": {
+          "description": "Deletes head branches automatically when pull requests are merged",
+          "type": "boolean"
+        },
+        "description": {
+          "description": "A short description of the repository",
+          "type": "string"
+        },
+        "has_discussions": {
+          "description": "Enables discussions. `PATCH /repos/{owner}/{repo}` does not document it; the repository\nobject documents it as whether discussions are enabled",
+          "type": "boolean"
+        },
+        "has_issues": {
+          "description": "Enables issues",
+          "type": "boolean"
+        },
+        "has_projects": {
+          "description": "Enables projects",
+          "type": "boolean"
+        },
+        "has_wiki": {
+          "description": "Enables the wiki",
+          "type": "boolean"
+        },
+        "homepage": {
+          "description": "A URL with more information about the repository",
+          "type": "string"
+        },
+        "topics": {
+          "description": "Set with `PUT /repos/{owner}/{repo}/topics`",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "visibility": {
+          "description": "Rulesets are not available on private repositories on the free plan",
+          "enum": [
+            "public",
+            "private"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RequiredDeployments": {
+      "additionalProperties": false,
+      "properties": {
+        "required_deployment_environments": {
+          "description": "Environments that must be deployed to successfully before a branch can be merged",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "RequiredReviewer": {
+      "additionalProperties": false,
+      "properties": {
+        "file_patterns": {
+          "description": "Pull requests changing files that match these patterns (fnmatch syntax) need the\nreviewer's approval",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "minimum_approvals": {
+          "description": "Approvals required from the reviewer. `0` adds the team to the pull request without\nrequiring its approval",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reviewer": {
+          "$ref": "#/$defs/ReviewActor",
+          "description": "The team that reviews matching files"
+        }
+      },
+      "required": [
+        "file_patterns",
+        "minimum_approvals",
+        "reviewer"
+      ],
+      "type": "object",
+      "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-params-required-reviewer-configuration"
+    },
+    "RequiredStatusChecks": {
+      "additionalProperties": false,
+      "description": "Keys differ from the API's: `require_up_to_date` is\n`strict_required_status_checks_policy`, and `checks` is `required_status_checks`.",
+      "properties": {
+        "checks": {
+          "description": "Status checks that must pass",
+          "items": {
+            "$ref": "#/$defs/StatusCheck"
+          },
+          "type": "array",
+          "x-github-api-name": "required_status_checks"
+        },
+        "do_not_enforce_on_create": {
+          "description": "Refs can be created even when a check would otherwise prohibit it",
+          "type": "boolean"
+        },
+        "require_up_to_date": {
+          "description": "Branches must be up to date with the base branch before merging",
+          "type": "boolean",
+          "x-github-api-name": "strict_required_status_checks_policy"
+        }
+      },
+      "type": "object"
+    },
+    "ReviewActor": {
+      "additionalProperties": false,
+      "description": "An actor in `pull_request`, written by name like a bypass actor. ghrs resolves the name to the\nAPI's `id`. `required_reviewers` accepts only `team`, and a `repository_role` in\n`dismissal_restriction` must be `admin`.",
+      "properties": {
+        "name": {
+          "description": "Team slug, role name, user login, or App slug (`self` for the App ghrs runs as). An App\nis sent as its installation ID in the Organization",
+          "type": "string",
+          "x-github-api-name": "id"
+        },
+        "type": {
+          "description": "The kind of actor `name` refers to",
+          "enum": [
+            "team",
+            "repository_role",
+            "user",
+            "integration"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "name"
+      ],
+      "type": "object"
+    },
+    "Rules": {
+      "additionalProperties": false,
+      "description": "Rules of a ruleset. Rules not written here are disabled.\n\nRules GitHub has but this table lacks cannot be declared. plan keeps them at their current\nvalues instead of disabling them, so a rule GitHub adds later is not deleted.\n\nFields are named by the API's rule type, so `KEYS` lists rule types. The renames follow\n`schema::RULE_NAMES`.",
+      "properties": {
+        "block_force_pushes": {
+          "description": "Only bypass actors can force push to matching refs",
+          "type": "boolean",
+          "x-github-api-name": "non_fast_forward",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-non-fast-forward"
+        },
+        "branch_name_pattern": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/Pattern"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-branch-name-pattern"
+        },
+        "code_coverage": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/CodeCoverage"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-code-coverage"
+        },
+        "code_quality": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/CodeQuality"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-code-quality"
+        },
+        "code_scanning": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/CodeScanning"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-code-scanning"
+        },
+        "commit_author_email_pattern": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/Pattern"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-commit-author-email-pattern"
+        },
+        "commit_message_pattern": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/Pattern"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-commit-message-pattern"
+        },
+        "committer_email_pattern": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/Pattern"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-committer-email-pattern"
+        },
+        "copilot_code_review": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/CopilotCodeReview"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-copilot-code-review"
+        },
+        "license_compliance_scanning": {
+          "description": "Added or changed dependencies must comply with the Organization's license policy",
+          "type": "boolean",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-license-compliance-scanning"
+        },
+        "merge_queue": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/MergeQueue"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-merge-queue"
+        },
+        "pull_request": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/PullRequest"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-pull-request"
+        },
+        "required_deployments": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/RequiredDeployments"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-required-deployments"
+        },
+        "required_linear_history": {
+          "description": "Prevents merge commits from being pushed to matching refs",
+          "type": "boolean",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-required-linear-history"
+        },
+        "required_signatures": {
+          "description": "Commits pushed to matching refs must have verified signatures",
+          "type": "boolean",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-required-signatures"
+        },
+        "required_status_checks": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/RequiredStatusChecks"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-required-status-checks"
+        },
+        "restrict_creations": {
+          "description": "Only bypass actors can create matching refs",
+          "type": "boolean",
+          "x-github-api-name": "creation",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-creation"
+        },
+        "restrict_deletions": {
+          "description": "Only bypass actors can delete matching refs",
+          "type": "boolean",
+          "x-github-api-name": "deletion",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-deletion"
+        },
+        "restrict_updates": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/Update"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-api-name": "update",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-update"
+        },
+        "tag_name_pattern": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/Pattern"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-tag-name-pattern"
+        },
+        "workflows": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/Workflows"
+            }
+          ],
+          "description": "`true` / `false`, or a table of parameters. `true` keeps the current parameters (the defaults on creation), and parameters not written in a table keep their current values",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-workflows"
+        }
+      },
+      "type": "object",
+      "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule"
+    },
+    "Ruleset": {
+      "additionalProperties": false,
+      "description": "A ruleset of the repository. Rulesets inherited from the Organization are not managed.",
+      "properties": {
+        "bypass_actors": {
+          "description": "Actors that may bypass the ruleset. Actors not listed lose their bypass, so omitting this\nremoves every bypass actor",
+          "items": {
+            "$ref": "#/$defs/BypassActor"
+          },
+          "type": "array"
+        },
+        "conditions": {
+          "$ref": "#/$defs/Conditions",
+          "default": {
+            "exclude": [],
+            "include": []
+          },
+          "description": "Refs the ruleset applies to. Omitted, it applies to no ref"
+        },
+        "enforcement": {
+          "description": "`evaluate` is Enterprise only",
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "type": "string"
+        },
+        "rules": {
+          "$ref": "#/$defs/Rules",
+          "default": {},
+          "description": "Rules not written are disabled"
+        },
+        "target": {
+          "description": "Push rulesets are Team / Enterprise only",
+          "enum": [
+            "branch",
+            "tag"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "enforcement"
+      ],
+      "type": "object",
+      "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-ruleset"
+    },
+    "StatusCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "description": "Name of the status check (the job name for GitHub Actions)",
+          "type": "string"
+        },
+        "integration": {
+          "description": "Slug of the App that must report the check. ghrs resolves it to the App ID",
+          "type": "string",
+          "x-github-api-name": "integration_id"
+        }
+      },
+      "required": [
+        "context"
+      ],
+      "type": "object",
+      "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-params-status-check-configuration"
+    },
+    "Team": {
+      "additionalProperties": false,
+      "properties": {
+        "permission": {
+          "description": "Repository role granted to the team",
+          "enum": [
+            "pull",
+            "triage",
+            "push",
+            "maintain",
+            "admin"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "permission"
+      ],
+      "type": "object"
+    },
+    "Update": {
+      "additionalProperties": false,
+      "properties": {
+        "update_allows_fetch_and_merge": {
+          "description": "The branch can still pull changes from its upstream repository",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "WorkflowFile": {
+      "additionalProperties": false,
+      "description": "`repository_id` is a numeric ID, which ghrs cannot resolve from a name yet, so validation\nrejects it: a workflow file cannot be declared. `workflows = true` keeps the current ones.",
+      "properties": {
+        "path": {
+          "description": "Path of the workflow file",
+          "type": "string"
+        },
+        "ref": {
+          "description": "Branch or tag of the workflow file to use",
+          "type": "string"
+        },
+        "repository_id": {
+          "description": "ID of the repository where the workflow is defined",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sha": {
+          "description": "Commit SHA of the workflow file to use",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "repository_id"
+      ],
+      "type": "object",
+      "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-params-workflow-file-reference"
+    },
+    "Workflows": {
+      "additionalProperties": false,
+      "properties": {
+        "do_not_enforce_on_create": {
+          "description": "Refs can be created even when a workflow would otherwise prohibit it",
+          "type": "boolean"
+        },
+        "workflows": {
+          "description": "Workflows that must pass",
+          "items": {
+            "$ref": "#/$defs/WorkflowFile"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Settings of one GitHub repository, declared for ghrs.",
+  "properties": {
+    "collaborator": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Collaborator"
+      },
+      "description": "Direct collaborators keyed by login. Collaborators not declared are kept unless plan /\napply run with --prune",
+      "type": "object"
+    },
+    "meta": {
+      "$ref": "#/$defs/Meta",
+      "description": "The target repository, used when --repo is not given"
+    },
+    "repository": {
+      "$ref": "#/$defs/Repository",
+      "default": {},
+      "description": "Repository settings. Only the fields written are compared"
+    },
+    "ruleset": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Ruleset"
+      },
+      "description": "Rulesets keyed by name (`[ruleset.main]`). Rulesets not declared are kept unless plan /\napply run with --prune",
+      "type": "object"
+    },
+    "team": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Team"
+      },
+      "description": "Teams keyed by slug (Organization-owned repositories only). Teams not declared are kept\nunless plan / apply run with --prune",
+      "type": "object"
+    }
+  },
+  "title": "ghrs declaration file (.ghrs.toml)",
+  "type": "object",
+  "x-github-rest-api-description": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json"
+}

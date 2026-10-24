@@ -13,6 +13,7 @@ includes:
   test: ./tasks/test.task.yml
   coverage: ./tasks/coverage.task.yml
   doc: ./tasks/doc.task.yml
+  schema: ./tasks/schema.task.yml
   build: ./tasks/build.task.yml
   release: ./tasks/release.task.yml
 
@@ -24,6 +25,7 @@ tasks:
     cmds:
     - task: tool
     - task: format
+    - task: schema
     - task: reviewdog
     - task: audit:policy
     - task: test
