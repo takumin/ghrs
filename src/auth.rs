@@ -132,7 +132,8 @@ pub async fn connect(
         Credential::App { id, key } => (id, key),
     };
 
-    let key = jsonwebtoken::EncodingKey::from_rsa_pem(&key)
+    // The re-export from octocrab, so the key type always matches the one `app` takes
+    let key = octocrab::EncodingKey::from_rsa_pem(&key)
         .context("private key is not a valid RSA PEM")?;
     let mut app = GitHub::new(octocrab::Octocrab::builder().app(id.into(), key).build()?);
 
