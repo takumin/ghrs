@@ -54,7 +54,7 @@ pub fn resolve(args: &AuthArgs) -> Result<Credential> {
     if let (Some(id), Some(path)) = (args.app_id, &args.private_key) {
         return Ok(Credential::App {
             id,
-            key: read_key(path)?,
+            key: read_key(&expand_home(path))?,
         });
     }
     if let Some(token) = &args.token {
