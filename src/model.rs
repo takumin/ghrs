@@ -266,7 +266,7 @@ pub struct Ruleset {
     /// removes every bypass actor
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bypass_actors: Vec<BypassActor>,
-    /// Rules not written are disabled
+    /// Rules not written keep their current state; `false` disables a rule
     #[serde(default)]
     pub rules: Rules,
 }
@@ -316,10 +316,11 @@ fn default_bypass_mode() -> String {
 }
 
 optional_table! {
-    /// Rules of a ruleset. Rules not written here are disabled.
+    /// Rules of a ruleset. Rules not written here keep their current state; `false` disables a
+    /// rule.
     ///
     /// Rules GitHub has but this table lacks cannot be declared. plan keeps them at their current
-    /// values instead of disabling them, so a rule GitHub adds later is not deleted.
+    /// values as well, so a rule GitHub adds later is not deleted.
     //
     // Fields are named by the API's rule type, so `KEYS` lists rule types. The renames follow
     // `schema::RULE_NAMES`.

@@ -10,11 +10,12 @@ use serde_json::{Map, Value as Json, json};
 use std::collections::BTreeMap;
 
 use crate::diagnostic::{Code, Diagnostic, Diagnostics};
-use crate::model::{Rules, Ruleset};
+use crate::model::Ruleset;
 use crate::resolve::Directory;
 use crate::schema::{
     ACTORS_WITHOUT_ID, PARAMETERIZED_RULES, REQUIRED_PARAMS, actor_type_to_api, actor_type_to_toml,
     for_each_review_actor, review_actor_type_to_api, role_id, rule_defaults, rule_to_api,
+    rule_to_toml,
 };
 use crate::validate;
 
@@ -158,8 +159,9 @@ impl RulesetState {
 /// same name.
 ///
 /// Rules are handled as follows.
-/// - Rules absent from the declaration are disabled (same as `false`)
-/// - Rules [`Rules`] does not know cannot be declared, so they keep their current values
+/// - Rules absent from the declaration keep their current values, as do rules
+///   [`Rules`](crate::model::Rules) does not know, which cannot be declared. `false` disables a
+///   rule
 /// - Bypass actors of kinds ghrs does not know are kept for the same reason
 /// - Parameters not written in a rule's table inherit the current value. PUT is a full
 ///   replacement, so this avoids resetting parameters the declaration does not touch to defaults
@@ -205,7 +207,8 @@ pub fn desired(
 
     let mut rules = BTreeMap::new();
     let mut missing_params = Vec::new();
-    for (key, value) in &decl.rules.entries() {
+    let entries = decl.rules.entries();
+    for (key, value) in &entries {
         let rule = rule_to_api(key);
         // Newly created rules have no current value to inherit, so fill required parameters with
         // their defaults
@@ -259,7 +262,7 @@ pub fn desired(
     }
     if let Some(current) = current {
         for (rule, params) in &current.rules {
-            if !Rules::KEYS.contains(&rule.as_str()) {
+            if !entries.contains_key(rule_to_toml(rule)) {
                 rules.insert(rule.clone(), params.clone());
             }
         }
@@ -529,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn undeclared_rules_are_disabled() {
+    fn false_disables_rules() {
         let cur = current(json!([{ "type": "deletion" }, { "type": "non_fast_forward" }]));
         let want = desired(
             &decl("[rules]\nrestrict_deletions = true\nblock_force_pushes = false"),
@@ -541,15 +544,19 @@ mod tests {
         assert_eq!(want.rules["deletion"], None);
     }
 
-    /// A rule GitHub added after ghrs cannot be declared, so it must not be deleted either
+    /// Neither an unwritten rule nor one GitHub added after ghrs, which cannot be declared, is
+    /// deleted
     #[test]
-    fn unknown_rules_keep_current_values() {
+    fn unwritten_rules_keep_current_values() {
         let cur = current(json!([
             { "type": "deletion" },
             { "type": "future_rule", "parameters": { "x": 1 } },
         ]));
         let want = desired(&decl(""), Some(&cur), &Directory::default()).unwrap();
-        assert_eq!(want.rules.keys().collect::<Vec<_>>(), ["future_rule"]);
+        assert_eq!(
+            want.rules.keys().collect::<Vec<_>>(),
+            ["deletion", "future_rule"]
+        );
         assert_eq!(want.rules["future_rule"], Some(json!({ "x": 1 })));
     }
 
