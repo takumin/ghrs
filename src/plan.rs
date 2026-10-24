@@ -10,13 +10,13 @@ use serde_json::{Map, Value as Json, json};
 use crate::access;
 use crate::auth::SelfApp;
 use crate::cli::Resource;
-use crate::diagnostic::Diagnostics;
+use crate::diagnostic::{Code, Diagnostic, Diagnostics};
 use crate::diff::{self, Action, Op, ResourceChange};
 use crate::github::GitHub;
 use crate::model::{Config, Rules};
 use crate::repo::RepoRef;
 use crate::resolve::{self, Directory};
-use crate::schema::actor_type_to_toml;
+use crate::schema::{MAX_RULESETS, actor_type_to_toml};
 use crate::state::{self, RulesetState};
 use crate::validate;
 
@@ -253,6 +253,25 @@ pub async fn run(
 
         resolve::labels(gh, target, &current, &mut dir).await?;
         let (rulesets, undeclared) = diff::rulesets(&desired, &current, prune, &dir);
+        // Undeclared rulesets kept without --prune count toward the limit as well. validate has
+        // already checked the declared ones alone
+        if !undeclared.is_empty() && desired.len() + undeclared.len() > MAX_RULESETS {
+            return Err(Diagnostics::new(vec![
+                Diagnostic::error(
+                    Code::TooManyRulesets,
+                    format!(
+                        "at most {MAX_RULESETS} rulesets are allowed per repository ({} declared \
+                        and {} kept because they are not declared)",
+                        desired.len(),
+                        undeclared.len()
+                    ),
+                )
+                .at("ruleset")
+                .help("delete the undeclared rulesets with --prune, or declare fewer rulesets"),
+            ])
+            .into());
+        }
+        let mut ruleset_steps = Vec::new();
         for change in &rulesets {
             let name = change.name.clone().unwrap_or_default();
             let want = desired.iter().find(|d| d.name == name);
@@ -271,8 +290,10 @@ pub async fn run(
                 (Action::NoChange, ..) => continue,
                 _ => bail!("cannot build the apply steps for ruleset \"{name}\""),
             };
-            steps.push(step);
+            ruleset_steps.push(step);
         }
+        order_ruleset_steps(&mut ruleset_steps, current.len());
+        steps.extend(ruleset_steps);
         changes.extend(rulesets);
         ignored.extend(undeclared.iter().map(|name| format!("ruleset \"{name}\"")));
     }
@@ -293,6 +314,19 @@ pub async fn run(
         writes: steps.iter().map(Step::writes).sum(),
         steps,
     })
+}
+
+/// Creating before deleting would pass through more rulesets than the limit allows (for example,
+/// when one is renamed at the limit with --prune), so delete first then. Otherwise creations go
+/// first, so a failure leaves the old protection in place.
+fn order_ruleset_steps(steps: &mut [Step], current: usize) {
+    let creates = steps
+        .iter()
+        .filter(|s| matches!(s, Step::CreateRuleset { .. }))
+        .count();
+    if current + creates > MAX_RULESETS {
+        steps.sort_by_key(|s| !matches!(s, Step::DeleteRuleset { .. }));
+    }
 }
 
 fn repository_step(config: &Config, change: &ResourceChange) -> Option<Step> {
@@ -356,4 +390,50 @@ async fn current_rulesets(
         out.push(state);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kinds(steps: &[Step]) -> Vec<&str> {
+        steps
+            .iter()
+            .map(|s| match s {
+                Step::CreateRuleset { .. } => "create",
+                Step::UpdateRuleset { .. } => "update",
+                Step::DeleteRuleset { .. } => "delete",
+                _ => "other",
+            })
+            .collect()
+    }
+
+    #[test]
+    fn deletes_rulesets_first_only_at_the_limit() {
+        let steps = || {
+            vec![
+                Step::CreateRuleset {
+                    name: "new".to_string(),
+                    body: json!({}),
+                },
+                Step::UpdateRuleset {
+                    name: "kept".to_string(),
+                    id: 1,
+                    body: json!({}),
+                },
+                Step::DeleteRuleset {
+                    name: "old".to_string(),
+                    id: 2,
+                },
+            ]
+        };
+
+        let mut below = steps();
+        order_ruleset_steps(&mut below, MAX_RULESETS - 1);
+        assert_eq!(kinds(&below), ["create", "update", "delete"]);
+
+        let mut at = steps();
+        order_ruleset_steps(&mut at, MAX_RULESETS);
+        assert_eq!(kinds(&at), ["delete", "create", "update"]);
+    }
 }
