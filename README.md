@@ -46,6 +46,7 @@ ghrs apply
 ```
 
 The target repository is taken from `--repo OWNER/NAME`, then from `[meta]` in the declaration file, then from the git remote of the current directory.
+`import` reads no declaration file, so it skips `[meta]`.
 
 ## Commands
 
@@ -192,7 +193,8 @@ The toolchain is managed with [aqua](https://aquaproj.github.io/) and [Task](htt
 
 ```sh
 aqua install
-task          # format, lint, audit, test, doc, build
+task          # format, lint, dependency policy check, test, doc, build
+task audit    # the policy check and the RustSec advisory scan
 task test
 ```
 
