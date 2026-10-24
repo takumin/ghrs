@@ -16,21 +16,19 @@ allow_auto_merge = true
 delete_branch_on_merge = true
 default_branch = "main"
 topics = [
-    "cli",
-    "declarative",
-    "github",
-    "iac",
-    "infrastructure-as-code",
-    "rulesets",
-    "rust",
+  "cli",
+  "declarative",
+  "github",
+  "iac",
+  "infrastructure-as-code",
+  "rulesets",
+  "rust",
 ]
 
 [ruleset.main]
 target = "branch"
 enforcement = "active"
-bypass_actors = [
-  { type = "repository_role", name = "admin", mode = "always" },
-]
+bypass_actors = [{ type = "repository_role", name = "admin", mode = "always" }]
 
 [ruleset.main.conditions]
 include = ["~DEFAULT_BRANCH"]
@@ -43,11 +41,7 @@ block_force_pushes = true
 copilot_code_review = true
 
 [ruleset.main.rules.pull_request]
-allowed_merge_methods = [
-    "merge",
-    "squash",
-    "rebase",
-]
+allowed_merge_methods = ["merge", "squash", "rebase"]
 dismiss_stale_reviews_on_push = true
 require_code_owner_review = true
 require_extra_approval_for_unattributed_changes = true
@@ -59,16 +53,12 @@ required_reviewers = []
 [ruleset.main.rules.required_status_checks]
 require_up_to_date = true
 do_not_enforce_on_create = false
-checks = [
-  { context = "CI", integration = "github-actions" },
-]
+checks = [{ context = "CI", integration = "github-actions" }]
 
 [ruleset.tags]
 target = "tag"
 enforcement = "active"
-bypass_actors = [
-  { type = "repository_role", name = "admin", mode = "always" },
-]
+bypass_actors = [{ type = "repository_role", name = "admin", mode = "always" }]
 
 [ruleset.tags.conditions]
 include = ["~ALL"]
@@ -84,6 +74,4 @@ block_force_pushes = true
 [ruleset.tags.rules.required_status_checks]
 require_up_to_date = true
 do_not_enforce_on_create = false
-checks = [
-  { context = "CI", integration = "github-actions" },
-]
+checks = [{ context = "CI", integration = "github-actions" }]
