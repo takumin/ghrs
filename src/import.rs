@@ -14,7 +14,9 @@ use crate::model::{
 };
 use crate::repo::RepoRef;
 use crate::resolve;
-use crate::schema::{for_each_review_actor, review_actor_type_to_toml, role_name};
+use crate::schema::{
+    PERMISSIONS, VISIBILITIES, for_each_review_actor, review_actor_type_to_toml, role_name,
+};
 use crate::validate;
 
 pub struct Importer {
@@ -92,6 +94,7 @@ impl Importer {
                     grant.key
                 ));
             }
+            self.check_permission("collaborator", &grant.key, &grant.permission);
             collaborators.push(Collaborator {
                 login: grant.key,
                 permission: grant.permission,
@@ -100,6 +103,7 @@ impl Importer {
         let mut teams = Vec::new();
         if owned_by_org {
             for grant in access::current_teams(&mut self.gh, &target).await? {
+                self.check_permission("team", &grant.key, &grant.permission);
                 teams.push(Team {
                     slug: grant.key,
                     permission: grant.permission,
@@ -124,11 +128,18 @@ impl Importer {
         let v = self.get(format!("/repos/{owner}/{repo}")).await?;
         let owned_by_org = v["owner"]["type"] == "Organization";
 
+        let visibility = string_or_empty(&v["visibility"]);
+        if !VISIBILITIES.contains(&visibility.as_str()) {
+            self.warn(format!(
+                "repository.visibility \"{visibility}\" is not supported; wrote it as is, which \
+                plan rejects until it is removed"
+            ));
+        }
         // Omission means "not managed", so output everything even if equal to the default
         let repository = Repository {
             description: Some(string_or_empty(&v["description"])),
             homepage: Some(string_or_empty(&v["homepage"])),
-            visibility: Some(string_or_empty(&v["visibility"])),
+            visibility: Some(visibility),
             has_issues: Some(v["has_issues"].as_bool().unwrap_or(false)),
             has_wiki: Some(v["has_wiki"].as_bool().unwrap_or(false)),
             has_projects: Some(v["has_projects"].as_bool().unwrap_or(false)),
@@ -205,6 +216,17 @@ impl Importer {
             bypass_actors,
             rules,
         })
+    }
+
+    /// Custom repository roles (and the invitation-only `triage_plus`) cannot be declared.
+    fn check_permission(&mut self, kind: &str, key: &str, permission: &str) {
+        if !PERMISSIONS.contains(&permission) {
+            self.warn(format!(
+                "{kind} \"{key}\": permission \"{permission}\" is not supported; wrote it as \
+                is, which plan rejects until it is replaced with one of {}",
+                PERMISSIONS.join(", ")
+            ));
+        }
     }
 
     /// A kind ghrs does not know cannot be declared, so it is left out with a warning.
