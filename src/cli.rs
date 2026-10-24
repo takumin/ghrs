@@ -54,6 +54,8 @@ pub enum Command {
     Drift(DriftArgs),
     /// Write the JSON Schema: key meanings, types, and allowed values
     Schema(SchemaArgs),
+    /// Show what keys of the declaration file mean, and their names in the GitHub API
+    Explain(ExplainArgs),
     /// Write a shell completion script to standard output
     Completion(CompletionArgs),
 }
@@ -65,7 +67,10 @@ impl Command {
             Command::Plan(args) => args.json,
             Command::Apply(args) => args.plan.json,
             Command::Drift(args) => args.json,
-            Command::Import(_) | Command::Schema(_) | Command::Completion(_) => false,
+            Command::Import(_)
+            | Command::Schema(_)
+            | Command::Explain(_)
+            | Command::Completion(_) => false,
         }
     }
 }
@@ -133,6 +138,17 @@ pub struct ImportArgs {
     /// Write the output without the comment header that references the JSON Schema
     #[arg(long, conflicts_with = "schema")]
     pub no_schema: bool,
+}
+
+#[derive(Args)]
+pub struct ExplainArgs {
+    /// Key path such as `ruleset.main.rules.pull_request` (lists every key if omitted)
+    #[arg(value_name = "KEY")]
+    pub key: Option<String>,
+
+    /// Explain each key written in this declaration file instead
+    #[arg(long, value_name = "PATH", conflicts_with = "key")]
+    pub config: Option<PathBuf>,
 }
 
 #[derive(Args)]

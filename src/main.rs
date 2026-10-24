@@ -6,6 +6,7 @@ mod auth;
 mod cli;
 mod diagnostic;
 mod diff;
+mod explain;
 mod github;
 mod import;
 mod model;
@@ -73,6 +74,23 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         cli::Command::Schema(args) => {
             let text = format!("{}\n", serde_json::to_string_pretty(&model::json_schema())?);
             write_output(args.out.as_deref(), &text)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        cli::Command::Explain(args) => {
+            let text = match (&args.key, &args.config) {
+                (_, Some(path)) => {
+                    let text = std::fs::read_to_string(path)
+                        .with_context(|| format!("cannot read {}", path.display()))?;
+                    explain::config(&text).with_context(|| path.display().to_string())?
+                }
+                (Some(key), None) => explain::key(key)?,
+                (None, None) => {
+                    out(&explain::index())?;
+                    note(explain::HINT);
+                    return Ok(ExitCode::SUCCESS);
+                }
+            };
+            out(&text)?;
             Ok(ExitCode::SUCCESS)
         }
         cli::Command::Completion(args) => {
