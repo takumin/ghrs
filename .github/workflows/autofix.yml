@@ -71,6 +71,8 @@ jobs:
         path: ~/.cache/sccache
     - name: Formatting
       run: task format
+    - name: Generate schema
+      run: task schema
     - name: sccache stats
       if: ${{ !startsWith(github.ref, 'refs/tags/') }}
       run: sccache --show-stats

@@ -56,7 +56,7 @@ The target repository is taken from `--repo OWNER/NAME`, then from `[meta]` in t
 | `ghrs apply` | Apply the difference to GitHub |
 | `ghrs import` | Export the current settings in `.ghrs.toml` format |
 | `ghrs drift` | Report only whether there is any difference |
-| `ghrs schema` | Write the JSON Schema of the declaration file |
+| `ghrs schema` | Write the JSON Schema: key meanings, types, and allowed values |
 | `ghrs completion <SHELL>` | Write a shell completion script to standard output |
 
 Common options for `plan` and `apply`:
@@ -81,7 +81,14 @@ Like `plan` without `--prune`, `drift` does not count undeclared rulesets, colla
 ## JSON Schema
 
 `ghrs schema` writes the JSON Schema of the declaration file, which editors and coding agents can use to find the allowed keys and values.
-`import --schema` references it from the first line of the output in the form [taplo](https://taplo.tamasfe.dev/) reads.
+It is also committed as [`schema/ghrs.schema.json`](schema/ghrs.schema.json), which `import` references for its own version in the form [taplo](https://taplo.tamasfe.dev/) reads:
+
+```toml
+#:schema https://raw.githubusercontent.com/takumin/ghrs/v<VERSION>/schema/ghrs.schema.json
+# Take key meanings from the schema, not from key names or the GitHub API.
+```
+
+`--schema PATH` changes the reference, and `--no-schema` drops these lines.
 
 ```sh
 ghrs schema --out ghrs.schema.json
@@ -201,9 +208,10 @@ The toolchain is managed with [aqua](https://aquaproj.github.io/) and [Task](htt
 
 ```sh
 aqua install
-task          # format, lint, dependency policy check, test, doc, build
+task          # format, schema, lint, dependency policy check, test, doc, build
 task audit    # the policy check and the RustSec advisory scan
 task test
+task schema   # regenerate schema/ghrs.schema.json (CI does this on pull requests)
 ```
 
 ## License

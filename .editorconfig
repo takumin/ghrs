@@ -20,6 +20,10 @@ indent_style = space
 [*.toml]
 indent_style = space
 
+# serde_json writes the generated schema with two spaces
+[schema/*.json]
+indent_style = space
+
 [*.rs]
 max_line_length = 100
 indent_style    = space
