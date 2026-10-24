@@ -76,6 +76,7 @@ For an existing ruleset, that covers deleting it, disabling it, changing its tar
 Without a terminal, `apply` refuses to proceed unless `--yes` is given.
 
 `drift --exit-code` exits with status 2 when there is a difference, which is useful for scheduled checks in CI.
+Like `plan` without `--prune`, `drift` does not count undeclared rulesets, collaborators, and teams as a difference.
 
 ## JSON Schema
 
