@@ -10,9 +10,9 @@ use crate::model::{BypassActor, Config, ReviewActor, Rule, Ruleset};
 use crate::plan::Scope;
 use crate::schema::{
     ACTORS_WITHOUT_ID, ALLOWED_ACTIONS, BRANCH_ONLY_RULES, BYPASS_MODES, ENFORCEMENTS,
-    MAX_RULESETS, ORG_ONLY_RULES, PERMISSIONS, PUSH_RULES, REPOSITORY_ROLES, ROLES_WITHOUT_WRITE,
-    RULE_NAMES, TAG_ONLY_RULES, TARGETS, VISIBILITIES, WORKFLOW_PERMISSIONS, actor_type_names,
-    actor_type_to_api, ref_patterns, role_id, rule_to_api,
+    FORK_PR_APPROVAL_POLICIES, MAX_RULESETS, ORG_ONLY_RULES, PERMISSIONS, PUSH_RULES,
+    REPOSITORY_ROLES, ROLES_WITHOUT_WRITE, RULE_NAMES, TAG_ONLY_RULES, TARGETS, VISIBILITIES,
+    WORKFLOW_PERMISSIONS, actor_type_names, actor_type_to_api, ref_patterns, role_id, rule_to_api,
 };
 
 fn allowed(values: &[&str]) -> String {
@@ -336,6 +336,12 @@ fn check_actions(config: &Config, errors: &mut Vec<Diagnostic>) {
             WORKFLOW_PERMISSIONS,
             Code::WorkflowPermissionsNotAllowed,
         ),
+        (
+            "fork_pr_contributor_approval",
+            &actions.fork_pr_contributor_approval,
+            FORK_PR_APPROVAL_POLICIES,
+            Code::ForkPrApprovalNotAllowed,
+        ),
     ] {
         if let Some(value) = value
             && !values.contains(&value.as_str())
@@ -376,6 +382,32 @@ fn check_actions(config: &Config, errors: &mut Vec<Diagnostic>) {
             Some(_) => d
                 .at(path)
                 .help("set allowed_actions to \"selected\", or remove actions.selected_actions"),
+        });
+    }
+
+    // GitHub ignores include_claim_keys under the default template and does not return it, so
+    // plan would show a diff every time
+    if let Some(oidc) = &actions.oidc_subject_claim
+        && oidc.include_claim_keys.is_some()
+        && oidc.use_default != Some(false)
+    {
+        let path = "actions.oidc_subject_claim.use_default";
+        let d = Diagnostic::error(
+            Code::ClaimKeysNeedCustomTemplate,
+            "actions.oidc_subject_claim.include_claim_keys needs \
+            actions.oidc_subject_claim.use_default = false",
+        )
+        .at(path);
+        errors.push(match oidc.use_default {
+            // It may change the template GitHub has now, so it is not machine-applicable
+            None => d.help("declare the template it belongs to").fix(
+                Applicability::MaybeIncorrect,
+                Edit::Set {
+                    path: path.to_string(),
+                    value: json!(false),
+                },
+            ),
+            Some(_) => d.help("set use_default to false, or remove include_claim_keys"),
         });
     }
 }
@@ -560,14 +592,13 @@ pub fn check_context(
         }
     }
 
-    // Rulesets are unavailable for private repositories on the free plan. A declared visibility
-    // is applied only with the repository in scope
+    // Rulesets are unavailable for private repositories on the free plan
     let declared_visibility = config
         .repository
         .visibility
         .as_deref()
         .filter(|_| scope.repository);
-    let visibility = declared_visibility.unwrap_or(current_visibility);
+    let visibility = visibility(config, current_visibility, scope);
     if scope.rulesets && visibility == "private" && !config.rulesets.is_empty() {
         let mut d = Diagnostic::error(
             Code::RulesetsOnPrivate,
@@ -581,7 +612,37 @@ pub fn check_context(
         errors.push(d);
     }
 
+    // GitHub returns 422 (`Fork PR approval is not allowed for private repositories.`)
+    // (observed)
+    if scope.actions
+        && visibility == "private"
+        && config.actions.fork_pr_contributor_approval.is_some()
+    {
+        let path = "actions.fork_pr_contributor_approval";
+        let mut d = Diagnostic::error(
+            Code::ForkPrApprovalOnPrivate,
+            "actions.fork_pr_contributor_approval is only available on public repositories",
+        )
+        .at(path)
+        .fix(Applicability::MaybeIncorrect, remove(path));
+        if declared_visibility.is_some() {
+            d = d.help("set repository.visibility to \"public\" or remove it");
+        }
+        errors.push(d);
+    }
+
     errors
+}
+
+/// The visibility the repository has once applied. A declared visibility is applied only with
+/// the repository in scope.
+pub fn visibility<'a>(config: &'a Config, current: &'a str, scope: &Scope) -> &'a str {
+    config
+        .repository
+        .visibility
+        .as_deref()
+        .filter(|_| scope.repository)
+        .unwrap_or(current)
 }
 
 /// Adding `organization_admin` to a personal repository's ruleset makes GitHub return 422
@@ -1416,6 +1477,61 @@ name = "owner"
         let d = errors("[actions]\nallowed_actions = \"all\"\n[actions.selected_actions]");
         assert_eq!(d[0].code, Code::SelectedActionsNeedSelected);
         assert_eq!(d[0].fix, None);
+
+        assert_eq!(
+            codes("[actions]\nfork_pr_contributor_approval = \"nobody\""),
+            [Code::ForkPrApprovalNotAllowed]
+        );
+    }
+
+    #[test]
+    fn include_claim_keys_need_a_custom_template() {
+        let oidc = |body: &str| errors(&format!("[actions.oidc_subject_claim]\n{body}"));
+        assert!(oidc("use_default = false\ninclude_claim_keys = [\"repo\"]").is_empty());
+
+        let d = oidc("include_claim_keys = [\"repo\"]");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].code, Code::ClaimKeysNeedCustomTemplate);
+        assert_eq!(
+            d[0].fix,
+            Some(Fix {
+                applicability: Applicability::MaybeIncorrect,
+                edit: Edit::Set {
+                    path: "actions.oidc_subject_claim.use_default".to_string(),
+                    value: json!(false),
+                },
+            })
+        );
+        let d = oidc("use_default = true\ninclude_claim_keys = [\"repo\"]");
+        assert_eq!(d[0].code, Code::ClaimKeysNeedCustomTemplate);
+        assert_eq!(d[0].fix, None);
+    }
+
+    #[test]
+    fn fork_pr_approval_needs_a_public_repository() {
+        let codes = |toml: &str, visibility: &str, scope: &Scope| {
+            let config: Config = toml::from_str(toml).unwrap();
+            check_context(&config, "takumin", false, visibility, scope)
+                .iter()
+                .map(|d| d.code)
+                .collect::<Vec<_>>()
+        };
+        let approval = "[actions]\nfork_pr_contributor_approval = \"first_time_contributors\"";
+        assert!(codes(approval, "public", &ALL).is_empty());
+        assert_eq!(
+            codes(approval, "private", &ALL),
+            [Code::ForkPrApprovalOnPrivate]
+        );
+        assert!(codes(approval, "private", &ACCESS).is_empty());
+
+        // The declared visibility wins
+        let made_public = format!("[repository]\nvisibility = \"public\"\n{approval}");
+        assert!(codes(&made_public, "private", &ALL).is_empty());
+        let made_private = format!("[repository]\nvisibility = \"private\"\n{approval}");
+        assert_eq!(
+            codes(&made_private, "public", &ALL),
+            [Code::ForkPrApprovalOnPrivate]
+        );
     }
 
     #[test]

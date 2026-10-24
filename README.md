@@ -138,11 +138,19 @@ allowed_actions = "selected"          # "all", "local_only", or "selected"
 sha_pinning_required = true           # actions must be pinned to a full commit SHA
 default_workflow_permissions = "read" # GITHUB_TOKEN permissions: "read" or "write"
 can_approve_pull_request_reviews = false
+# fork PRs needing approval to run workflows (public repositories only):
+# "all_external_contributors", "first_time_contributors", or "first_time_contributors_new_to_github"
+fork_pr_contributor_approval = "all_external_contributors"
 
 [actions.selected_actions]            # requires allowed_actions = "selected"
 github_owned_allowed = true
 verified_allowed = false
 patterns_allowed = ["aquaproj/*", "reviewdog/*"]
+
+[actions.oidc_subject_claim]          # the template of the OIDC token's sub claim
+use_default = false
+use_immutable_subject = true
+include_claim_keys = ["repo", "context"] # requires use_default = false
 
 # Each ruleset is a table keyed by its name.
 [ruleset.main]
@@ -206,7 +214,8 @@ Rulesets inherited from the organization are not managed.
 
 `[actions]` reads and writes the settings on the repository's Actions settings page.
 Like `[repository]`, it compares only the fields written, and `plan` makes no API calls for it when it is empty.
-Changes that widen what workflows can do, such as moving `allowed_actions` from `selected` to `all`, granting `write` to `GITHUB_TOKEN`, or adding to `patterns_allowed`, count as weakening protection.
+It also covers the fork pull request approval policy, which private repositories do not have, and the OIDC `sub` claim template.
+Changes that widen what workflows can do, such as moving `allowed_actions` from `selected` to `all`, granting `write` to `GITHUB_TOKEN`, adding to `patterns_allowed`, letting more fork pull requests run without approval, or turning off `use_immutable_subject`, count as weakening protection.
 When the owning organization's policy fixes a setting, GitHub rejects the change with a 409.
 
 ghrs assumes the GitHub Free plan.
