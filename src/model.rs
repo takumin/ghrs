@@ -53,8 +53,10 @@ macro_rules! optional_table {
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// The target repository, used when --repo is not given
     #[serde(default, skip_serializing_if = "Meta::is_empty")]
     pub meta: Meta,
+    /// Repository settings. Only the fields written are compared
     #[serde(default)]
     pub repository: Repository,
     /// Rulesets keyed by name (`[ruleset.main]`). Rulesets not declared are kept unless plan /
@@ -94,8 +96,10 @@ pub struct Config {
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Meta {
+    /// User or Organization that owns the repository
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    /// Repository name, without the owner
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
 }
@@ -111,32 +115,45 @@ impl Meta {
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Repository {
+    /// A short description of the repository
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// A URL with more information about the repository
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
     /// Rulesets are not available on private repositories on the free plan
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(extend("enum" = schema::VISIBILITIES))]
     pub visibility: Option<String>,
+    /// Enables issues
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_issues: Option<bool>,
+    /// Enables the wiki
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_wiki: Option<bool>,
+    /// Enables projects
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_projects: Option<bool>,
+    /// Enables discussions. `PATCH /repos/{owner}/{repo}` does not document it; the repository
+    /// object documents it as whether discussions are enabled
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_discussions: Option<bool>,
+    /// Allows merging pull requests with a merge commit
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_merge_commit: Option<bool>,
+    /// Allows squash-merging pull requests
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_squash_merge: Option<bool>,
+    /// Allows rebase-merging pull requests
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_rebase_merge: Option<bool>,
+    /// Allows auto-merge on pull requests
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_auto_merge: Option<bool>,
+    /// Deletes head branches automatically when pull requests are merged
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delete_branch_on_merge: Option<bool>,
+    /// Default branch. The branch must already exist
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_branch: Option<String>,
     /// Set with `PUT /repos/{owner}/{repo}/topics`
@@ -157,10 +174,14 @@ pub struct Ruleset {
     /// `evaluate` is Enterprise only
     #[schemars(extend("enum" = schema::ENFORCEMENTS))]
     pub enforcement: String,
+    /// Refs the ruleset applies to. Omitted, it applies to no ref
     #[serde(default)]
     pub conditions: Conditions,
+    /// Actors that may bypass the ruleset. Actors not listed lose their bypass, so omitting this
+    /// removes every bypass actor
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bypass_actors: Vec<BypassActor>,
+    /// Rules not written are disabled
     #[serde(default)]
     pub rules: Rules,
 }
@@ -172,9 +193,11 @@ pub struct Ruleset {
 #[serde(deny_unknown_fields)]
 #[schemars(extend("x-github-source" = rest_api_schema("repository-ruleset-conditions")))]
 pub struct Conditions {
+    /// Ref patterns the ruleset applies to (fnmatch syntax)
     #[serde(default)]
     #[schemars(extend("x-github-api-name" = "ref_name.include"))]
     pub include: Vec<String>,
+    /// Ref patterns excluded even when `include` matches them (fnmatch syntax)
     #[serde(default)]
     #[schemars(extend("x-github-api-name" = "ref_name.exclude"))]
     pub exclude: Vec<String>,
@@ -229,9 +252,11 @@ optional_table! {
         /// Only bypass actors can delete matching refs
         #[serde(rename = "restrict_deletions")]
         deletion: bool,
+        /// Prevents merge commits from being pushed to matching refs
         required_linear_history: bool,
         merge_queue: Rule<MergeQueue>,
         required_deployments: Rule<RequiredDeployments>,
+        /// Commits pushed to matching refs must have verified signatures
         required_signatures: bool,
         pull_request: Rule<PullRequest>,
         required_status_checks: Rule<RequiredStatusChecks>,
@@ -248,6 +273,7 @@ optional_table! {
         code_quality: Rule<CodeQuality>,
         code_coverage: Rule<CodeCoverage>,
         copilot_code_review: Rule<CopilotCodeReview>,
+        /// Added or changed dependencies must comply with the Organization's license policy
         license_compliance_scanning: bool,
     }
 }
@@ -373,42 +399,65 @@ impl<'de, P: Deserialize<'de>> Deserialize<'de> for Rule<P> {
 
 optional_table! {
     pub struct Update {
+        /// The branch can still pull changes from its upstream repository
         update_allows_fetch_and_merge: bool,
     }
 }
 
 optional_table! {
     pub struct MergeQueue {
+        /// Minutes a required status check has to report a conclusion before it is assumed to
+        /// have failed
         check_response_timeout_minutes: u64,
+        /// `ALLGREEN`: the merge commit for each pull request in a group must pass the required
+        /// checks. `HEADGREEN`: only the commit at the head of the group must pass them
         #[schemars(extend("enum" = schema::MERGE_QUEUE_GROUPING))]
         grouping_strategy: String,
+        /// Number of queued pull requests requesting checks and workflow runs at the same time
         max_entries_to_build: u64,
+        /// Maximum number of pull requests merged together in a group
         max_entries_to_merge: u64,
+        /// Method used to merge queued pull requests
         #[schemars(extend("enum" = schema::MERGE_QUEUE_METHODS))]
         merge_method: String,
+        /// Minimum number of pull requests merged together in a group
         min_entries_to_merge: u64,
+        /// Minutes to wait for `min_entries_to_merge` after the first pull request is queued.
+        /// After that, a smaller group is merged
         min_entries_to_merge_wait_minutes: u64,
     }
 }
 
 optional_table! {
     pub struct RequiredDeployments {
+        /// Environments that must be deployed to successfully before a branch can be merged
         required_deployment_environments: Vec<String>,
     }
 }
 
 optional_table! {
     pub struct PullRequest {
+        /// Merge methods allowed for pull requests. At least one is required
         #[schemars(extend("items" = { "type": "string", "enum": schema::MERGE_METHODS }))]
         allowed_merge_methods: Vec<String>,
+        /// New reviewable commits dismiss previous approvals
         dismiss_stale_reviews_on_push: bool,
+        /// Pull requests that modify files with a designated code owner need an approval from
+        /// one
         require_code_owner_review: bool,
-        /// Undocumented; returned by the API alongside the documented parameters (observed)
+        /// Requires one more approval than `required_approving_review_count` on pull requests
+        /// Copilot opens under its own app identity, not on behalf of a person. No effect when zero
+        /// approvals are required. GitHub enables it when omitted. Not in the REST API
+        /// description; the meaning is from GitHub's ruleset docs (public preview)
         #[schemars(extend("x-github-observed" = true))]
         require_extra_approval_for_unattributed_changes: bool,
+        /// The most recent reviewable push must be approved by someone other than its pusher
         require_last_push_approval: bool,
+        /// Number of approving reviews required before a pull request can be merged
         required_approving_review_count: u64,
+        /// All conversations on code must be resolved before a pull request can be merged
         required_review_thread_resolution: bool,
+        /// Teams that must review changes to matching files
         required_reviewers: Vec<RequiredReviewer>,
         /// Organization-owned repositories only
         dismissal_restriction: DismissalRestriction,
@@ -440,8 +489,13 @@ impl PullRequest {
     "repository-rule-params-required-reviewer-configuration"
 )))]
 pub struct RequiredReviewer {
+    /// Pull requests changing files that match these patterns (fnmatch syntax) need the
+    /// reviewer's approval
     pub file_patterns: Vec<String>,
+    /// Approvals required from the reviewer. `0` adds the team to the pull request without
+    /// requiring its approval
     pub minimum_approvals: u64,
+    /// The team that reviews matching files
     pub reviewer: ReviewActor,
 }
 
@@ -458,7 +512,9 @@ optional_table! {
         "repository-rule-params-dismissal-restriction"
     )))]
     pub struct DismissalRestriction {
+        /// Restricts review dismissal to `allowed_actors`
         enabled: bool,
+        /// Actors allowed to dismiss pull request reviews
         allowed_actors: Vec<ReviewActor>,
     }
 }
@@ -469,6 +525,7 @@ optional_table! {
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewActor {
+    /// The kind of actor `name` refers to
     #[serde(rename = "type")]
     #[schemars(extend("enum" = schema::review_actor_type_names()))]
     pub actor_type: String,
@@ -485,7 +542,9 @@ optional_table! {
         /// Branches must be up to date with the base branch before merging
         #[schemars(extend("x-github-api-name" = "strict_required_status_checks_policy"))]
         require_up_to_date: bool,
+        /// Refs can be created even when a check would otherwise prohibit it
         do_not_enforce_on_create: bool,
+        /// Status checks that must pass
         #[schemars(extend("x-github-api-name" = "required_status_checks"))]
         checks: Vec<StatusCheck>,
     }
@@ -497,6 +556,7 @@ optional_table! {
     "repository-rule-params-status-check-configuration"
 )))]
 pub struct StatusCheck {
+    /// Name of the status check (the job name for GitHub Actions)
     pub context: String,
     /// Slug of the App that must report the check. ghrs resolves it to the App ID
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -507,17 +567,23 @@ pub struct StatusCheck {
 optional_table! {
     /// Parameters shared by the `*_pattern` rules.
     pub struct Pattern {
+        /// How the rule appears in GitHub's settings
         name: String,
+        /// Fails the rule when the pattern matches, instead of when it does not
         negate: bool,
+        /// How `pattern` is compared with the value
         #[schemars(extend("enum" = schema::PATTERN_OPERATORS))]
         operator: String,
+        /// The string or regular expression to match
         pattern: String,
     }
 }
 
 optional_table! {
     pub struct Workflows {
+        /// Refs can be created even when a workflow would otherwise prohibit it
         do_not_enforce_on_create: bool,
+        /// Workflows that must pass
         workflows: Vec<WorkflowFile>,
     }
 }
@@ -530,10 +596,14 @@ optional_table! {
     "repository-rule-params-workflow-file-reference"
 )))]
 pub struct WorkflowFile {
+    /// Path of the workflow file
     pub path: String,
+    /// Branch or tag of the workflow file to use
     #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
     pub git_ref: Option<String>,
+    /// ID of the repository where the workflow is defined
     pub repository_id: u64,
+    /// Commit SHA of the workflow file to use
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha: Option<String>,
 }
@@ -546,6 +616,7 @@ impl WorkflowFile {
 
 optional_table! {
     pub struct CodeScanning {
+        /// Tools that must provide code scanning results
         code_scanning_tools: Vec<CodeScanningTool>,
     }
 }
@@ -556,10 +627,13 @@ optional_table! {
     "repository-rule-params-code-scanning-tool"
 )))]
 pub struct CodeScanningTool {
+    /// Alert severity at which results block a ref update
     #[schemars(extend("enum" = schema::ALERTS_THRESHOLDS))]
     pub alerts_threshold: String,
+    /// Security severity at which results block a ref update
     #[schemars(extend("enum" = schema::SECURITY_ALERTS_THRESHOLDS))]
     pub security_alerts_threshold: String,
+    /// Name of the code scanning tool
     pub tool: String,
 }
 
@@ -571,6 +645,7 @@ impl CodeScanningTool {
 
 optional_table! {
     pub struct CodeQuality {
+        /// Lowest severity of code quality findings that must be resolved before merging
         #[schemars(extend("enum" = schema::CODE_QUALITY_SEVERITIES))]
         severity: String,
     }
@@ -579,14 +654,19 @@ optional_table! {
 optional_table! {
     /// Coverage in percent
     pub struct CodeCoverage {
+        /// Pull requests with line coverage below this are blocked
         minimum_coverage: f64,
+        /// Pull requests whose line coverage drops more than this many percentage points from the
+        /// default branch are blocked
         max_coverage_drop: f64,
     }
 }
 
 optional_table! {
     pub struct CopilotCodeReview {
+        /// Copilot also reviews draft pull requests
         review_draft_pull_requests: bool,
+        /// Copilot reviews each new push to a pull request
         review_on_push: bool,
     }
 }
@@ -597,6 +677,7 @@ optional_table! {
 pub struct Collaborator {
     #[serde(skip)]
     pub login: String,
+    /// Repository role granted to the user
     #[schemars(extend("enum" = schema::PERMISSIONS))]
     pub permission: String,
 }
@@ -606,6 +687,7 @@ pub struct Collaborator {
 pub struct Team {
     #[serde(skip)]
     pub slug: String,
+    /// Repository role granted to the team
     #[schemars(extend("enum" = schema::PERMISSIONS))]
     pub permission: String,
 }
@@ -922,6 +1004,39 @@ mod tests {
                 "{rule}"
             );
         }
+    }
+
+    /// `import` tells readers to take key meanings from the schema, so every key has one
+    #[test]
+    fn json_schema_describes_every_property() {
+        fn undescribed(schema: &Json, path: &str, out: &mut Vec<String>) {
+            match schema {
+                Json::Object(map) => {
+                    for (key, property) in map
+                        .get("properties")
+                        .and_then(Json::as_object)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if property.get("description").is_none() {
+                            out.push(format!("{path}.{key}"));
+                        }
+                    }
+                    for (key, child) in map {
+                        undescribed(child, &format!("{path}/{key}"), out);
+                    }
+                }
+                Json::Array(items) => {
+                    for (i, item) in items.iter().enumerate() {
+                        undescribed(item, &format!("{path}[{i}]"), out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        undescribed(&json_schema(), "", &mut out);
+        assert_eq!(out, Vec::<String>::new());
     }
 
     #[test]
