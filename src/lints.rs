@@ -402,7 +402,10 @@ fn check_actions(config: &Config, out: &mut Vec<Diagnostic>) {
                 unless their account is also new",
             )
             .at("actions.fork_pr_contributor_approval")
-            .help("\"first_time_contributors\" or \"all_external_contributors\" requires approval more often"),
+            .help(
+                "\"first_time_contributors\" or \"all_external_contributors\" requires approval \
+                more often",
+            ),
         );
     }
     if let Some(oidc) = &actions.oidc_subject_claim
