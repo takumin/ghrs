@@ -373,6 +373,19 @@ impl Rules {
         }
     }
 
+    /// The rules a ruleset with `target` can have, by rule type. Rules for the other target, and
+    /// on a personal repository those for Organizations only, are left out.
+    pub fn applicable(target: &str, owned_by_org: bool) -> impl Iterator<Item = &'static str> {
+        let other_target = match target {
+            "branch" => schema::TAG_ONLY_RULES,
+            "tag" => schema::BRANCH_ONLY_RULES,
+            _ => &[],
+        };
+        Self::KEYS.iter().copied().filter(move |rule| {
+            !other_target.contains(rule) && (owned_by_org || !schema::ORG_ONLY_RULES.contains(rule))
+        })
+    }
+
     /// Parameter keys ghrs knows for a rule. `None` for rules without parameters and for
     /// `required_status_checks`, whose keys differ from the API's.
     pub fn param_keys(rule: &str) -> Option<&'static [&'static str]> {
@@ -902,6 +915,17 @@ mod tests {
     use super::*;
     use crate::schema::PARAMETERIZED_RULES;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn applicable_rules_follow_target_and_owner() {
+        let branch: Vec<_> = Rules::applicable("branch", false).collect();
+        assert!(branch.contains(&"copilot_code_review"));
+        assert!(!branch.contains(&"tag_name_pattern"));
+        assert!(!branch.contains(&"merge_queue"));
+        let tag: Vec<_> = Rules::applicable("tag", true).collect();
+        assert!(tag.contains(&"tag_name_pattern"));
+        assert!(!tag.contains(&"pull_request"));
+    }
 
     /// The keys import keeps in nested tables are the ones the types serialize
     #[test]

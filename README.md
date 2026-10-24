@@ -191,7 +191,7 @@ Settings ghrs knows but the file leaves unwritten keep their current values: fie
 List the ones to leave unchanged on purpose in `meta.unmanaged`, as key paths; a table covers every key in it.
 An entry that is not a key path, or covers no unwritten setting, is an error.
 `--strict` turns each remaining unwritten setting into an error, which catches a setting a newer ghrs adds before it goes unmanaged without notice.
-`import` writes every setting GitHub returns.
+`import` writes every setting GitHub returns, and writes each rule the ruleset can have but does not enable as `false`.
 
 Actors are written by name (App slug, team slug, user login, role name), and ghrs resolves them to IDs.
 When running as a GitHub App, `integration = "self"` refers to that App.
