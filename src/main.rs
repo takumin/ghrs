@@ -7,9 +7,12 @@ mod auth;
 mod cli;
 mod diagnostic;
 mod diff;
+mod document;
 mod explain;
 mod github;
 mod import;
+mod lint;
+mod lints;
 mod model;
 mod plan;
 mod render;
@@ -27,7 +30,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use apply::Outcome;
-use cli::{ApplyArgs, AuthArgs, Cli, DriftArgs, ImportArgs, PlanArgs, Resource};
+use cli::{ApplyArgs, AuthArgs, Cli, DriftArgs, ImportArgs, LintArgs, PlanArgs, Resource};
 use diagnostic::Diagnostics;
 use github::GitHub;
 use model::Config;
@@ -73,6 +76,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         cli::Command::Plan(args) => plan(args, &cli.auth).await,
         cli::Command::Apply(args) => apply(args, &cli.auth).await,
         cli::Command::Drift(args) => drift(args, &cli.auth).await,
+        cli::Command::Lint(args) => lint(args),
         cli::Command::Schema(args) => {
             let text = format!("{}\n", serde_json::to_string_pretty(&model::json_schema())?);
             write_output(args.out.as_deref(), &text)?;
@@ -300,6 +304,80 @@ async fn drift(args: DriftArgs, auth: &AuthArgs) -> Result<ExitCode> {
     })
 }
 
+/// Validate each declaration file with what `plan` checks, taking what plan reads from GitHub
+/// from the flags instead. Reads no credentials, so it runs anywhere the files are.
+fn lint(args: LintArgs) -> Result<ExitCode> {
+    let context = lint::Context {
+        owned_by_org: args.owner_type.map(|t| matches!(t, cli::OwnerType::Org)),
+        visibility: args.visibility.map(cli::Visibility::as_str),
+        strict: args.strict,
+        levels: model::LintLevels {
+            allow: args.allow,
+            warn: args.warn,
+            deny: args.deny,
+        },
+    };
+    if let Some(name) = [
+        &context.levels.allow,
+        &context.levels.warn,
+        &context.levels.deny,
+    ]
+    .into_iter()
+    .flatten()
+    .find(|name| !lints::is_name(name))
+    {
+        bail!("\"{name}\" is not a lint; write a lint code such as W0301, or a group");
+    }
+    let format = if args.json {
+        cli::Format::Json
+    } else {
+        args.format
+    };
+    let mut reports = Vec::new();
+    for path in &args.paths {
+        let mut text = read_config(path)?;
+        if args.fix {
+            let (fixed, applied) = lint::fix(&text, &context, args.unsafe_fixes);
+            if applied > 0 {
+                std::fs::write(path, &fixed)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+                let plural = if applied == 1 { "" } else { "es" };
+                note(&format!(
+                    "{}: applied {applied} fix{plural}\n",
+                    path.display()
+                ));
+                text = fixed;
+            }
+        }
+        let mut report = lint::run(&text, &context);
+        report.diagnostics.file = Some(path.clone());
+        reports.push(report);
+    }
+    let failed = reports.iter().any(lint::Report::failed);
+
+    match format {
+        cli::Format::Json => out(&format!("{}\n", serde_json::to_string_pretty(&reports)?))?,
+        cli::Format::Github => out(&lint::github(&reports))?,
+        cli::Format::Text => {
+            for report in &reports {
+                if !report.diagnostics.diagnostics.is_empty() {
+                    note(&format!("{}\n", report.diagnostics));
+                }
+                for skipped in &report.skipped {
+                    let file = report.diagnostics.file.as_deref().unwrap_or(Path::new(""));
+                    note(&format!("note: {}: skipped {skipped}\n", file.display()));
+                }
+            }
+        }
+    }
+
+    Ok(if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
 /// Common preamble for plan / apply / drift. apply recomputes the plan before applying.
 async fn compute_plan(
     path: &Path,
@@ -309,12 +387,13 @@ async fn compute_plan(
     strict: bool,
     auth: &AuthArgs,
 ) -> Result<(GitHub, RepoRef, plan::Plan)> {
-    let config = load_config(path)?;
+    let text = read_config(path)?;
+    let config = validate::parse(&text).map_err(|d| in_file(d.into(), path, &text))?;
     // Report declaration errors before reading credentials, which may run `op` or `gh`. Only
     // `self` depends on the credential, so it is checked once the credential is known
     let invalid = |is_app| {
         let errors = validate::check(&config, is_app);
-        (!errors.is_empty()).then(|| in_file(Diagnostics::new(errors).into(), path))
+        (!errors.is_empty()).then(|| in_file(Diagnostics::new(errors).into(), path, &text))
     };
     if let Some(err) = invalid(true) {
         return Err(err);
@@ -336,14 +415,15 @@ async fn compute_plan(
         self_app.as_ref(),
     )
     .await
-    .map_err(|err| in_file(err, path))?;
+    .map_err(|err| in_file(err, path, &text))?;
     Ok((gh, target, plan))
 }
 
-/// Attach the declaration file path to validation errors.
-fn in_file(err: anyhow::Error, path: &Path) -> anyhow::Error {
+/// Attach the declaration file path, and where in `text` each error is, to validation errors.
+fn in_file(err: anyhow::Error, path: &Path, text: &str) -> anyhow::Error {
     match err.downcast::<Diagnostics>() {
         Ok(mut diagnostics) => {
+            document::locate(&mut diagnostics.diagnostics, text);
             diagnostics.file = Some(path.to_path_buf());
             diagnostics.into()
         }
@@ -375,19 +455,16 @@ fn confirm(plan: &plan::Plan, target: &RepoRef) -> Result<bool> {
     Ok(answer.trim() == expected)
 }
 
-fn load_config(path: &Path) -> Result<Config> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
+fn read_config(path: &Path) -> Result<String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => bail!(
             "{} not found; create it from the current settings with ghrs import --out {}",
             path.display(),
             path.display()
         ),
-        Err(err) => {
-            return Err(err).with_context(|| format!("cannot read {}", path.display()));
-        }
-    };
-    validate::parse(&text).map_err(|d| in_file(d.into(), path))
+        Err(err) => Err(err).with_context(|| format!("cannot read {}", path.display())),
+    }
 }
 
 /// Determine the target repository in the order `--repo` -> `[meta]` -> git remote.

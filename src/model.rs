@@ -112,11 +112,40 @@ pub struct Meta {
     /// --strict rejects them
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unmanaged: Vec<String>,
+    /// Levels of the lints `ghrs lint` reports, which `--allow`, `--warn` and `--deny` override
+    #[serde(default, skip_serializing_if = "LintLevels::is_empty")]
+    pub lint: LintLevels,
 }
 
 impl Meta {
     fn is_empty(&self) -> bool {
-        self.owner.is_none() && self.repo.is_none() && self.unmanaged.is_empty()
+        self.owner.is_none()
+            && self.repo.is_none()
+            && self.unmanaged.is_empty()
+            && self.lint.is_empty()
+    }
+}
+
+/// Levels of lints, each named by its code (`W0301`), its group (`security`, `pedantic`), `all`,
+/// or `warnings` for every lint left at warn. A code takes precedence over its group and a group
+/// over `all`, and of the levels one name is given, the strictest.
+#[derive(Serialize, Deserialize, Default, JsonSchema, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct LintLevels {
+    /// Lints not to report
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
+    /// Lints to report as warnings, which do not fail lint
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warn: Vec<String>,
+    /// Lints to report as errors, which fail lint
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny: Vec<String>,
+}
+
+impl LintLevels {
+    pub fn is_empty(&self) -> bool {
+        self.allow.is_empty() && self.warn.is_empty() && self.deny.is_empty()
     }
 }
 

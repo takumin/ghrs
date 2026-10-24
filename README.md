@@ -56,6 +56,7 @@ The target repository is taken from `--repo OWNER/NAME`, then from `[meta]` in t
 | `ghrs apply` | Apply the difference to GitHub |
 | `ghrs import` | Export the current settings in `.ghrs.toml` format |
 | `ghrs drift` | Report only whether there is any difference |
+| `ghrs lint [PATH...]` | Validate declaration files without calling the GitHub API |
 | `ghrs schema` | Write the JSON Schema: key meanings, types, and allowed values |
 | `ghrs explain [KEY]` | Show what keys mean, and their names in the GitHub API |
 | `ghrs completion <SHELL>` | Write a shell completion script to standard output |
@@ -80,6 +81,61 @@ Without a terminal, `apply` refuses to proceed unless `--yes` is given.
 `drift --exit-code` exits with status 2 when there is a difference, which is useful for scheduled checks in CI.
 `drift` also takes `--strict`.
 Like `plan` without `--prune`, `drift` does not count undeclared rulesets, collaborators, and teams as a difference.
+
+`lint` runs the validation `plan` does without calling the GitHub API, so it needs neither credentials nor network access, and suits pre-commit hooks and CI.
+It validates each file given (default: `.ghrs.toml`), reports the diagnostics of every file, and exits with status 1 when any file has an error.
+What `plan` reads from GitHub comes from flags instead: `--owner-type org|user` says who owns the repository, and `--visibility public|private` gives its current visibility, which `repository.visibility` overrides as in `plan`.
+Without them, the checks that depend on them are skipped with a note, and `meta.owner` is needed to check that the owner is not declared as a collaborator.
+`integration = "self"` is accepted, since the credential is not known.
+Unwritten settings are reported as warnings (`W0101`), which do not change the exit status; `--strict` turns them into errors as in `plan`.
+When the owner type or the visibility is not known, a setting is reported as unwritten only when it is a setting either way, and a `meta.unmanaged` entry is reported as covering nothing only when it covers nothing either way.
+Each diagnostic gives the line and column where its key is written, or, for an unwritten setting, where the closest table above it is.
+With `--json`, it writes an array with the file, its diagnostics, and the checks it skipped, for each file.
+`--format github` writes them as GitHub Actions workflow commands instead, which annotate the lines in pull requests.
+
+`--fix` applies the suggested fixes marked `machine-applicable`, which keep the meaning of the declaration, writes the file, and reports what is left.
+`--unsafe-fixes` with it also applies the ones marked `maybe-incorrect`, such as the closest key to a misspelled one; review the result before committing it.
+Comments and formatting are kept, though a comment on an element that is removed may stay behind.
+Like `plan`, validation stops at the first error in parsing the file, so the fixes for the rest show up once that error is fixed.
+
+### Lints
+
+Besides validation, `lint` reports declarations GitHub accepts but that likely weaken protection.
+Each lint has a code and a level: `allow` does not report it, `warn` reports it as a warning, and `deny` as an error, which fails `lint`.
+Only values written are checked, since an unwritten one keeps a current value `lint` does not know.
+
+| Code | Group | Default | Reports |
+| --- | --- | --- | --- |
+| `W0101` | | warn | A setting left unwritten |
+| `W0201` | security | warn | A disabled ruleset |
+| `W0202` | security | warn | `restrict_deletions = false` on a ruleset covering the default branch, with no other ruleset enabling it |
+| `W0203` | security | warn | The same for `block_force_pushes` |
+| `W0301` | security | warn | A bypass actor other than admins with `mode = "always"` or `"exempt"` |
+| `W0501` | security | warn | `allowed_actions = "all"` |
+| `W0502` | security | warn | `sha_pinning_required = false` |
+| `W0503` | security | warn | `default_workflow_permissions = "write"` |
+| `W0504` | security | warn | `can_approve_pull_request_reviews = true` |
+| `W0505` | security | warn | `use_immutable_subject = false` |
+| `W0506` | security | warn | A pattern in `patterns_allowed` that allows any owner, such as `*/*` |
+| `W0507` | security | warn | `fork_pr_contributor_approval = "first_time_contributors_new_to_github"` |
+| `W0205` | pedantic | allow | `required_approving_review_count = 0` |
+| `W0302` | pedantic | allow | Admins bypassing with `mode = "always"` or `"exempt"`, which they can do anyway by disabling the ruleset |
+| `W0508` | pedantic | allow | `verified_allowed = true` |
+
+Levels are given to a code, a group, `all`, or `warnings`, which stands for every lint at warn at that point.
+`meta.lint` sets them in the file, and `--allow` (`-A`), `--warn` (`-W`), and `--deny` (`-D`) override it.
+A code takes precedence over its group and a group over `all`, and of the levels one name is given, the strictest.
+
+```toml
+[meta.lint]
+allow = ["W0201"]      # a ruleset kept disabled on purpose
+deny = ["security"]
+```
+
+```sh
+ghrs lint -W pedantic  # also report the pedantic lints
+ghrs lint -D warnings  # fail on any warning, as in CI
+```
 
 ## JSON Schema
 

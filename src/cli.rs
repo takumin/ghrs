@@ -52,6 +52,8 @@ pub enum Command {
     Import(ImportArgs),
     /// Report only whether there is any difference
     Drift(DriftArgs),
+    /// Validate declaration files without calling the GitHub API
+    Lint(LintArgs),
     /// Write the JSON Schema: key meanings, types, and allowed values
     Schema(SchemaArgs),
     /// Show what keys of the declaration file mean, and their names in the GitHub API
@@ -67,6 +69,7 @@ impl Command {
             Command::Plan(args) => args.json,
             Command::Apply(args) => args.plan.json,
             Command::Drift(args) => args.json,
+            Command::Lint(args) => args.json || args.format == Format::Json,
             Command::Import(_)
             | Command::Schema(_)
             | Command::Explain(_)
@@ -183,6 +186,93 @@ pub struct DriftArgs {
     /// Fail when a setting ghrs knows is neither written nor listed in meta.unmanaged
     #[arg(long)]
     pub strict: bool,
+}
+
+#[derive(Args)]
+pub struct LintArgs {
+    /// Declaration files to validate
+    #[arg(value_name = "PATH", default_value = ".ghrs.toml")]
+    pub paths: Vec<PathBuf>,
+
+    /// Who owns the repositories, for the checks that depend on it (skipped if omitted)
+    #[arg(long, value_name = "TYPE")]
+    pub owner_type: Option<OwnerType>,
+
+    /// Current visibility of the repositories (repository.visibility takes precedence; the checks
+    /// that depend on it are skipped if neither is given)
+    #[arg(long, value_name = "VISIBILITY")]
+    pub visibility: Option<Visibility>,
+
+    /// Fail when a setting ghrs knows is neither written nor listed in meta.unmanaged
+    #[arg(long)]
+    pub strict: bool,
+
+    /// Lints not to report, by code or group (overrides meta.lint)
+    #[arg(short = 'A', long, value_name = "LINT,...", value_delimiter = ',')]
+    pub allow: Vec<String>,
+
+    /// Lints to report as warnings, by code or group (overrides meta.lint)
+    #[arg(short = 'W', long, value_name = "LINT,...", value_delimiter = ',')]
+    pub warn: Vec<String>,
+
+    /// Lints to report as errors, by code or group (overrides meta.lint); `warnings` makes every
+    /// warning an error
+    #[arg(short = 'D', long, value_name = "LINT,...", value_delimiter = ',')]
+    pub deny: Vec<String>,
+
+    /// Apply the suggested fixes that keep the meaning of the declaration, and write the file
+    #[arg(long)]
+    pub fix: bool,
+
+    /// With --fix, also apply the suggested fixes that may not match the intent
+    #[arg(long, requires = "fix")]
+    pub unsafe_fixes: bool,
+
+    /// Output format
+    #[arg(
+        long,
+        value_name = "FORMAT",
+        default_value = "text",
+        conflicts_with = "json"
+    )]
+    pub format: Format,
+
+    /// Output JSON (same as --format json)
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Format {
+    /// Human-readable, to standard error
+    Text,
+    /// JSON, to standard output
+    Json,
+    /// GitHub Actions workflow commands, which annotate the file in pull requests
+    Github,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum OwnerType {
+    /// An Organization
+    Org,
+    /// A personal account
+    User,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum Visibility {
+    Public,
+    Private,
+}
+
+impl Visibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Visibility::Public => "public",
+            Visibility::Private => "private",
+        }
+    }
 }
 
 #[derive(Args)]

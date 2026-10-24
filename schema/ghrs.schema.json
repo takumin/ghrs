@@ -262,6 +262,34 @@
       "type": "object",
       "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/repository-rule-params-dismissal-restriction"
     },
+    "LintLevels": {
+      "additionalProperties": false,
+      "description": "Levels of lints, each named by its code (`W0301`), its group (`security`, `pedantic`), `all`,\nor `warnings` for every lint left at warn. A code takes precedence over its group and a group\nover `all`, and of the levels one name is given, the strictest.",
+      "properties": {
+        "allow": {
+          "description": "Lints not to report",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deny": {
+          "description": "Lints to report as errors, which fail lint",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "warn": {
+          "description": "Lints to report as warnings, which do not fail lint",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "MergeQueue": {
       "additionalProperties": false,
       "properties": {
@@ -319,6 +347,10 @@
       "additionalProperties": false,
       "description": "The target repository, and the settings ghrs leaves unchanged on purpose. --repo takes\nprecedence over `owner` and `repo`, and without either, the target is taken from the git\nremote.",
       "properties": {
+        "lint": {
+          "$ref": "#/$defs/LintLevels",
+          "description": "Levels of the lints `ghrs lint` reports, which `--allow`, `--warn` and `--deny` override"
+        },
         "owner": {
           "description": "User or Organization that owns the repository",
           "type": "string"
