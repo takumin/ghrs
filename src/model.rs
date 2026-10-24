@@ -113,55 +113,41 @@ impl Meta {
     }
 }
 
-/// Repository settings, with the names of `PATCH /repos/{owner}/{repo}`. Only the fields that are
-/// written are compared. Unwritten fields are left untouched.
-#[derive(Serialize, Deserialize, Default, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Repository {
-    /// A short description of the repository
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// A URL with more information about the repository
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub homepage: Option<String>,
-    /// Rulesets are not available on private repositories on the free plan
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(extend("enum" = schema::VISIBILITIES))]
-    pub visibility: Option<String>,
-    /// Enables issues
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_issues: Option<bool>,
-    /// Enables the wiki
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_wiki: Option<bool>,
-    /// Enables projects
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_projects: Option<bool>,
-    /// Enables discussions. `PATCH /repos/{owner}/{repo}` does not document it; the repository
-    /// object documents it as whether discussions are enabled
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_discussions: Option<bool>,
-    /// Allows merging pull requests with a merge commit
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_merge_commit: Option<bool>,
-    /// Allows squash-merging pull requests
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_squash_merge: Option<bool>,
-    /// Allows rebase-merging pull requests
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_rebase_merge: Option<bool>,
-    /// Allows auto-merge on pull requests
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_auto_merge: Option<bool>,
-    /// Deletes head branches automatically when pull requests are merged
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delete_branch_on_merge: Option<bool>,
-    /// Default branch. The branch must already exist
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_branch: Option<String>,
-    /// Set with `PUT /repos/{owner}/{repo}/topics`
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub topics: Option<Vec<String>>,
+optional_table! {
+    /// Repository settings, with the names of `PATCH /repos/{owner}/{repo}`. Only the fields that
+    /// are written are compared. Unwritten fields are left untouched.
+    pub struct Repository {
+        /// A short description of the repository
+        description: String,
+        /// A URL with more information about the repository
+        homepage: String,
+        /// Rulesets are not available on private repositories on the free plan
+        #[schemars(extend("enum" = schema::VISIBILITIES))]
+        visibility: String,
+        /// Enables issues
+        has_issues: bool,
+        /// Enables the wiki
+        has_wiki: bool,
+        /// Enables projects
+        has_projects: bool,
+        /// Enables discussions. `PATCH /repos/{owner}/{repo}` does not document it; the repository
+        /// object documents it as whether discussions are enabled
+        has_discussions: bool,
+        /// Allows merging pull requests with a merge commit
+        allow_merge_commit: bool,
+        /// Allows squash-merging pull requests
+        allow_squash_merge: bool,
+        /// Allows rebase-merging pull requests
+        allow_rebase_merge: bool,
+        /// Allows auto-merge on pull requests
+        allow_auto_merge: bool,
+        /// Deletes head branches automatically when pull requests are merged
+        delete_branch_on_merge: bool,
+        /// Default branch. The branch must already exist
+        default_branch: String,
+        /// Set with `PUT /repos/{owner}/{repo}/topics`
+        topics: Vec<String>,
+    }
 }
 
 optional_table! {

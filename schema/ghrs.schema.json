@@ -402,7 +402,7 @@
     },
     "Repository": {
       "additionalProperties": false,
-      "description": "Repository settings, with the names of `PATCH /repos/{owner}/{repo}`. Only the fields that are\nwritten are compared. Unwritten fields are left untouched.",
+      "description": "Repository settings, with the names of `PATCH /repos/{owner}/{repo}`. Only the fields that\nare written are compared. Unwritten fields are left untouched.",
       "properties": {
         "allow_auto_merge": {
           "description": "Allows auto-merge on pull requests",
