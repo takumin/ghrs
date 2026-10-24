@@ -265,11 +265,14 @@ fn ruleset(
             want.name
         ));
     }
-    if have.is_some() {
+    if let Some(have) = have {
         destructive.extend(
             fields
                 .0
                 .iter()
+                // A rule the ruleset does not have yet only adds protection, whatever its
+                // parameters
+                .filter(|f| rule_of(&f.path).is_none_or(|rule| have.rules.contains_key(rule)))
                 .filter_map(weakening)
                 .map(|message| format!("ruleset \"{}\": {message}", want.name)),
         );
@@ -505,6 +508,11 @@ fn weakening(field: &FieldChange) -> Option<String> {
             after.map_or_else(|| "unset".to_string(), Json::to_string),
         )
     })
+}
+
+/// The rule a diff path belongs to (`rules.<rule>...`).
+fn rule_of(path: &str) -> Option<&str> {
+    path.strip_prefix("rules.")?.split('.').next()
 }
 
 /// Only `required_status_checks` uses short key names on the TOML side.
@@ -807,6 +815,42 @@ mod tests {
                 "ruleset \"r\": changes rules.pull_request.required_approving_review_count from \
                     2 to 1",
                 "ruleset \"r\": removes an entry from rules.required_status_checks.checks",
+            ]
+        );
+    }
+
+    /// A rule the ruleset does not have yet adds protection, whatever its parameters
+    #[test]
+    fn adding_a_rule_is_not_weakening() {
+        let have = state("active", vec![], json!([]));
+        let want = state(
+            "active",
+            vec![],
+            json!([
+                { "type": "update", "parameters": { "update_allows_fetch_and_merge": true } },
+                { "type": "required_status_checks", "parameters": {
+                    "strict_required_status_checks_policy": false,
+                    "do_not_enforce_on_create": true,
+                    "required_status_checks": [{ "context": "test" }],
+                } },
+            ]),
+        );
+        let (changes, _) = rulesets(&[want], &[have], false, &Directory::default());
+        assert_eq!(changes[0].action, Action::Update);
+        assert!(changes[0].destructive.is_empty());
+
+        // On a rule it already has, the same parameter still weakens it
+        let have = state("active", vec![], json!([{ "type": "update" }]));
+        let want = state(
+            "active",
+            vec![],
+            json!([{ "type": "update", "parameters": { "update_allows_fetch_and_merge": true } }]),
+        );
+        let (changes, _) = rulesets(&[want], &[have], false, &Directory::default());
+        assert_eq!(
+            changes[0].destructive,
+            [
+                "ruleset \"r\": changes rules.update.update_allows_fetch_and_merge from unset to true"
             ]
         );
     }
