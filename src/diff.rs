@@ -10,7 +10,9 @@ use serde_json::{Map, Value as Json, json};
 
 use crate::model::Repository;
 use crate::resolve::Directory;
-use crate::schema::{for_each_review_actor, review_actor_type_to_toml};
+use crate::schema::{
+    ACTORS_WITHOUT_ID, actor_type_to_toml, for_each_review_actor, review_actor_type_to_toml,
+};
 use crate::state::{Actor, RulesetState};
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -168,9 +170,7 @@ fn ruleset(
     let no_actors = Vec::new();
     let have_actors = have.map_or(&no_actors, |h| &h.actors);
     for actor in &want.actors {
-        let same_actor =
-            |a: &&Actor| a.actor_type == actor.actor_type && a.actor_id == actor.actor_id;
-        match have_actors.iter().find(same_actor) {
+        match have_actors.iter().find(|a| same_actor(a, actor)) {
             None => {
                 fields.push(Op::Add, "bypass_actors", None, Some(actor_json(actor, dir)));
                 if have.is_some() {
@@ -209,10 +209,7 @@ fn ruleset(
         }
     }
     for actor in have_actors {
-        let kept = want
-            .actors
-            .iter()
-            .any(|a| a.actor_type == actor.actor_type && a.actor_id == actor.actor_id);
+        let kept = want.actors.iter().any(|a| same_actor(a, actor));
         if !kept {
             fields.push(
                 Op::Remove,
@@ -591,6 +588,14 @@ fn actor_json(actor: &Actor, dir: &Directory) -> Json {
     Json::Object(entry)
 }
 
+/// A kind without an ID refers to the whole kind, so it matches by kind alone, whatever
+/// `actor_id` GitHub returns for it.
+fn same_actor(a: &Actor, b: &Actor) -> bool {
+    a.actor_type == b.actor_type
+        && (a.actor_id == b.actor_id
+            || actor_type_to_toml(&a.actor_type).is_some_and(|t| ACTORS_WITHOUT_ID.contains(&t)))
+}
+
 pub fn actor_label(actor: &Actor, dir: &Directory) -> String {
     let kind = crate::schema::actor_type_to_toml(&actor.actor_type).unwrap_or(&actor.actor_type);
     match dir.actor_name(&actor.actor_type, actor.actor_id) {
@@ -816,6 +821,41 @@ mod tests {
                     2 to 1",
                 "ruleset \"r\": removes an entry from rules.required_status_checks.checks",
             ]
+        );
+    }
+
+    /// Kinds without an ID match by kind, even when GitHub returns an ID for them
+    #[test]
+    fn actors_without_id_match_by_kind() {
+        let actor = |actor_type: &str, actor_id| Actor {
+            actor_type: actor_type.to_string(),
+            actor_id,
+            mode: "always".to_string(),
+        };
+        let have = state(
+            "active",
+            vec![
+                actor("OrganizationAdmin", Some(1)),
+                actor("DeployKey", Some(2)),
+            ],
+            json!([]),
+        );
+        let want = state(
+            "active",
+            vec![actor("OrganizationAdmin", None), actor("DeployKey", None)],
+            json!([]),
+        );
+        let (changes, _) = rulesets(&[want], &[have], false, &Directory::default());
+        assert_eq!(changes[0].action, Action::NoChange);
+        assert!(changes[0].destructive.is_empty());
+
+        // Other kinds still match by ID
+        let have = state("active", vec![actor("Team", Some(1))], json!([]));
+        let want = state("active", vec![actor("Team", Some(2))], json!([]));
+        let (changes, _) = rulesets(&[want], &[have], false, &Directory::default());
+        assert_eq!(
+            changed(&changes[0]),
+            [(Op::Add, "bypass_actors"), (Op::Remove, "bypass_actors")]
         );
     }
 
