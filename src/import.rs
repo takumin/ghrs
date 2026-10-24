@@ -259,7 +259,7 @@ impl Importer {
             "OrganizationAdmin" => ("organization_admin", None),
             "Team" => {
                 let id = actor_id.context("Team has no actor_id")?;
-                let slug = self.team_slug(id).await;
+                let slug = self.team_slug(id).await?;
                 let name = match slug {
                     Some(slug) => slug,
                     None => {
@@ -307,19 +307,28 @@ impl Importer {
         self.installation_names.get(&id).cloned()
     }
 
-    /// On failure the ID is left numeric, like an installation.
-    async fn team_slug(&mut self, id: u64) -> Option<String> {
+    /// When the token cannot list teams (403 / 404), the ID is left numeric, like an
+    /// installation. Other errors (rate limits, network) stop the import instead of writing IDs.
+    async fn team_slug(&mut self, id: u64) -> Result<Option<String>> {
         if self.team_names.is_none() {
-            let org = self.org.clone()?;
-            let list = self.gh.get_all(&format!("/orgs/{org}/teams")).await;
+            let Some(org) = self.org.clone() else {
+                return Ok(None);
+            };
+            let list = match self.gh.get_all(&format!("/orgs/{org}/teams")).await {
+                Ok(list) => list,
+                Err(err) if matches!(GitHub::status(&err), Some(403 | 404)) => Vec::new(),
+                Err(err) => return Err(err),
+            };
             self.team_names = Some(
-                list.unwrap_or_default()
-                    .iter()
+                list.iter()
                     .filter_map(|t| Some((t["id"].as_u64()?, t["slug"].as_str()?.to_string())))
                     .collect(),
             );
         }
-        self.team_names.as_ref()?.get(&id).cloned()
+        Ok(self
+            .team_names
+            .as_ref()
+            .and_then(|names| names.get(&id).cloned()))
     }
 
     /// `GET /app/{id}` returns public Apps and private Apps owned by the token's owner.
@@ -378,7 +387,7 @@ impl Importer {
                     self.status_checks(ruleset, params).await?
                 }
                 ("pull_request", Some(params)) => {
-                    let params = self.named_review_actors(ruleset, params).await;
+                    let params = self.named_review_actors(ruleset, params).await?;
                     self.plain_params(ruleset, &rule_type, target, &params)?
                 }
                 (_, Some(params)) => self.plain_params(ruleset, &rule_type, target, params)?,
@@ -392,7 +401,7 @@ impl Importer {
     /// Rewrite the `{id, type}` of `pull_request` reviewers and dismissal_restrictions into the
     /// declaration's `{type, name}`. IDs that cannot be mapped back to names are
     /// left numeric with a warning, and plan rejects them until they are replaced with names.
-    async fn named_review_actors(&mut self, ruleset: &str, params: &Json) -> Json {
+    async fn named_review_actors(&mut self, ruleset: &str, params: &Json) -> Result<Json> {
         let mut params = params.clone();
         let mut ids = Vec::new();
         let _ = for_each_review_actor(&mut params, |actor| {
@@ -405,13 +414,15 @@ impl Importer {
         let mut names = HashMap::new();
         for (kind, id) in ids {
             let name = match kind.as_str() {
-                "Team" => self.team_slug(id).await,
+                "Team" => self.team_slug(id).await?,
                 "RepositoryRole" => role_name(id).map(str::to_string),
                 "IntegrationInstallation" => self.installation_slug(id).await,
-                "User" => match self.get(format!("/user/{id}")).await {
-                    Ok(v) => v["login"].as_str().map(str::to_string),
-                    Err(_) => None,
-                },
+                // A deleted user returns 404; other errors stop the import
+                "User" => self
+                    .gh
+                    .get_optional(&format!("/user/{id}"))
+                    .await?
+                    .and_then(|v| v["login"].as_str().map(str::to_string)),
                 _ => None,
             };
             let name = name.unwrap_or_else(|| {
@@ -433,7 +444,7 @@ impl Importer {
             *actor = serde_json::json!({ "type": kind, "name": name });
             Ok::<(), ()>(())
         });
-        params
+        Ok(params)
     }
 
     async fn status_checks(&mut self, ruleset: &str, params: &Json) -> Result<Json> {
