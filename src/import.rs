@@ -1,7 +1,7 @@
 //! Read the current state from the GitHub API and convert it into the `.ghrs.toml` model.
 
 use anyhow::{Context, Result};
-use serde_json::{Map, Value as Json};
+use serde_json::{Map, Value as Json, json};
 use std::collections::HashMap;
 
 use crate::access;
@@ -385,14 +385,10 @@ impl Importer {
             let params = rule.get("parameters").filter(|p| !p.is_null());
 
             let value = match (rule_type.as_str(), params) {
+                // GitHub omits the parameters of `update` when update_allows_fetch_and_merge is
+                // false (observed). Written out, since `true` would leave it unwritten
+                ("update", None) => json!({ "update_allows_fetch_and_merge": false }),
                 (_, None) => Json::Bool(true),
-                // update_allows_fetch_and_merge = false is the default, so `true` declares it.
-                // Any other parameters are kept, since `true` keeps the current ones.
-                ("update", Some(params))
-                    if params["update_allows_fetch_and_merge"] == Json::Bool(false) =>
-                {
-                    Json::Bool(true)
-                }
                 ("required_status_checks", Some(params)) => {
                     self.status_checks(ruleset, params).await?
                 }
