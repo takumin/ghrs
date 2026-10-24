@@ -55,6 +55,11 @@ tasks:
     - 'Cargo.toml'
     - 'Cargo.lock'
     - 'src/**/*.rs'
+    # Fingerprint the task's own definition and the pinned toolchain so editing
+    # this task's commands or bumping rust-toolchain.toml re-runs it locally
+    # instead of being skipped on a stale binary.
+    - 'tasks/build.task.yml'
+    - 'rust-toolchain.toml'
     generates:
     - target/{{.TARGET}}/{{.PROFILE}}/{{.PROJNAME}}
     - dist/{{.PROJNAME}}-{{.PROFILE}}-{{.TARGET}}

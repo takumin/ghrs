@@ -54,7 +54,7 @@ pub fn resolve(args: &AuthArgs) -> Result<Credential> {
     if let (Some(id), Some(path)) = (args.app_id, &args.private_key) {
         return Ok(Credential::App {
             id,
-            key: read_key(path)?,
+            key: read_key(&expand_home(path))?,
         });
     }
     if let Some(token) = &args.token {
@@ -132,8 +132,9 @@ pub async fn connect(
         Credential::App { id, key } => (id, key),
     };
 
-    let key = jsonwebtoken::EncodingKey::from_rsa_pem(&key)
-        .context("private key is not a valid RSA PEM")?;
+    // The re-export from octocrab, so the key type always matches the one `app` takes
+    let key =
+        octocrab::EncodingKey::from_rsa_pem(&key).context("private key is not a valid RSA PEM")?;
     let mut app = GitHub::new(octocrab::Octocrab::builder().app(id.into(), key).build()?);
 
     let me = app.get("/app").await.with_context(|| {

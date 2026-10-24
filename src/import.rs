@@ -1,6 +1,6 @@
 //! Read the current state from the GitHub API and convert it into the `.ghrs.toml` model.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::{Map, Value as Json};
 use std::collections::HashMap;
 
@@ -14,7 +14,9 @@ use crate::model::{
 };
 use crate::repo::RepoRef;
 use crate::resolve;
-use crate::schema::{for_each_review_actor, review_actor_type_to_toml, role_name};
+use crate::schema::{
+    PERMISSIONS, VISIBILITIES, for_each_review_actor, review_actor_type_to_toml, role_name,
+};
 use crate::validate;
 
 pub struct Importer {
@@ -92,6 +94,7 @@ impl Importer {
                     grant.key
                 ));
             }
+            self.check_permission("collaborator", &grant.key, &grant.permission);
             collaborators.push(Collaborator {
                 login: grant.key,
                 permission: grant.permission,
@@ -100,6 +103,7 @@ impl Importer {
         let mut teams = Vec::new();
         if owned_by_org {
             for grant in access::current_teams(&mut self.gh, &target).await? {
+                self.check_permission("team", &grant.key, &grant.permission);
                 teams.push(Team {
                     slug: grant.key,
                     permission: grant.permission,
@@ -124,11 +128,18 @@ impl Importer {
         let v = self.get(format!("/repos/{owner}/{repo}")).await?;
         let owned_by_org = v["owner"]["type"] == "Organization";
 
+        let visibility = string_or_empty(&v["visibility"]);
+        if !VISIBILITIES.contains(&visibility.as_str()) {
+            self.warn(format!(
+                "repository.visibility \"{visibility}\" is not supported; wrote it as is, which \
+                plan rejects until it is removed"
+            ));
+        }
         // Omission means "not managed", so output everything even if equal to the default
         let repository = Repository {
             description: Some(string_or_empty(&v["description"])),
             homepage: Some(string_or_empty(&v["homepage"])),
-            visibility: Some(string_or_empty(&v["visibility"])),
+            visibility: Some(visibility),
             has_issues: Some(v["has_issues"].as_bool().unwrap_or(false)),
             has_wiki: Some(v["has_wiki"].as_bool().unwrap_or(false)),
             has_projects: Some(v["has_projects"].as_bool().unwrap_or(false)),
@@ -188,7 +199,7 @@ impl Importer {
         let mut bypass_actors = Vec::new();
         if let Some(actors) = v["bypass_actors"].as_array() {
             for actor in actors.clone() {
-                bypass_actors.push(self.bypass_actor(&name, &actor).await?);
+                bypass_actors.extend(self.bypass_actor(&name, &actor).await?);
             }
         }
 
@@ -207,7 +218,19 @@ impl Importer {
         })
     }
 
-    async fn bypass_actor(&mut self, ruleset: &str, v: &Json) -> Result<BypassActor> {
+    /// Custom repository roles (and the invitation-only `triage_plus`) cannot be declared.
+    fn check_permission(&mut self, kind: &str, key: &str, permission: &str) {
+        if !PERMISSIONS.contains(&permission) {
+            self.warn(format!(
+                "{kind} \"{key}\": permission \"{permission}\" is not supported; wrote it as \
+                is, which plan rejects until it is replaced with one of {}",
+                PERMISSIONS.join(", ")
+            ));
+        }
+    }
+
+    /// A kind ghrs does not know cannot be declared, so it is left out with a warning.
+    async fn bypass_actor(&mut self, ruleset: &str, v: &Json) -> Result<Option<BypassActor>> {
         let actor_type = string_or_empty(&v["actor_type"]);
         let actor_id = v["actor_id"].as_u64();
         let mode = string_or_empty(&v["bypass_mode"]);
@@ -236,7 +259,7 @@ impl Importer {
             "OrganizationAdmin" => ("organization_admin", None),
             "Team" => {
                 let id = actor_id.context("Team has no actor_id")?;
-                let slug = self.team_slug(id).await;
+                let slug = self.team_slug(id).await?;
                 let name = match slug {
                     Some(slug) => slug,
                     None => {
@@ -253,14 +276,20 @@ impl Importer {
             }
             // A deploy key refers to the whole kind, and actor_id is null (observed)
             "DeployKey" => ("deploy_key", None),
-            other => bail!("ruleset \"{ruleset}\": unknown actor_type \"{other}\""),
+            other => {
+                self.warn(format!(
+                    "ruleset \"{ruleset}\": bypass actor type \"{other}\" is not supported; left \
+                    it out of the declaration, and plan keeps it as is"
+                ));
+                return Ok(None);
+            }
         };
 
-        Ok(BypassActor {
+        Ok(Some(BypassActor {
             actor_type: toml_type.to_string(),
             name,
             mode,
-        })
+        }))
     }
 
     /// Only an Organization owner can list installations, so on failure the ID is left numeric.
@@ -278,19 +307,28 @@ impl Importer {
         self.installation_names.get(&id).cloned()
     }
 
-    /// On failure the ID is left numeric, like an installation.
-    async fn team_slug(&mut self, id: u64) -> Option<String> {
+    /// When the token cannot list teams (403 / 404), the ID is left numeric, like an
+    /// installation. Other errors (rate limits, network) stop the import instead of writing IDs.
+    async fn team_slug(&mut self, id: u64) -> Result<Option<String>> {
         if self.team_names.is_none() {
-            let org = self.org.clone()?;
-            let list = self.gh.get_all(&format!("/orgs/{org}/teams")).await;
+            let Some(org) = self.org.clone() else {
+                return Ok(None);
+            };
+            let list = match self.gh.get_all(&format!("/orgs/{org}/teams")).await {
+                Ok(list) => list,
+                Err(err) if matches!(GitHub::status(&err), Some(403 | 404)) => Vec::new(),
+                Err(err) => return Err(err),
+            };
             self.team_names = Some(
-                list.unwrap_or_default()
-                    .iter()
+                list.iter()
                     .filter_map(|t| Some((t["id"].as_u64()?, t["slug"].as_str()?.to_string())))
                     .collect(),
             );
         }
-        self.team_names.as_ref()?.get(&id).cloned()
+        Ok(self
+            .team_names
+            .as_ref()
+            .and_then(|names| names.get(&id).cloned()))
     }
 
     /// `GET /app/{id}` returns public Apps and private Apps owned by the token's owner.
@@ -349,7 +387,7 @@ impl Importer {
                     self.status_checks(ruleset, params).await?
                 }
                 ("pull_request", Some(params)) => {
-                    let params = self.named_review_actors(ruleset, params).await;
+                    let params = self.named_review_actors(ruleset, params).await?;
                     self.plain_params(ruleset, &rule_type, target, &params)?
                 }
                 (_, Some(params)) => self.plain_params(ruleset, &rule_type, target, params)?,
@@ -362,8 +400,8 @@ impl Importer {
 
     /// Rewrite the `{id, type}` of `pull_request` reviewers and dismissal_restrictions into the
     /// declaration's `{type, name}`. IDs that cannot be mapped back to names are
-    /// left numeric with a warning. plan rejects them as declaration errors.
-    async fn named_review_actors(&mut self, ruleset: &str, params: &Json) -> Json {
+    /// left numeric with a warning, and plan rejects them until they are replaced with names.
+    async fn named_review_actors(&mut self, ruleset: &str, params: &Json) -> Result<Json> {
         let mut params = params.clone();
         let mut ids = Vec::new();
         let _ = for_each_review_actor(&mut params, |actor| {
@@ -376,13 +414,15 @@ impl Importer {
         let mut names = HashMap::new();
         for (kind, id) in ids {
             let name = match kind.as_str() {
-                "Team" => self.team_slug(id).await,
+                "Team" => self.team_slug(id).await?,
                 "RepositoryRole" => role_name(id).map(str::to_string),
                 "IntegrationInstallation" => self.installation_slug(id).await,
-                "User" => match self.get(format!("/user/{id}")).await {
-                    Ok(v) => v["login"].as_str().map(str::to_string),
-                    Err(_) => None,
-                },
+                // A deleted user returns 404; other errors stop the import
+                "User" => self
+                    .gh
+                    .get_optional(&format!("/user/{id}"))
+                    .await?
+                    .and_then(|v| v["login"].as_str().map(str::to_string)),
                 _ => None,
             };
             let name = name.unwrap_or_else(|| {
@@ -404,7 +444,7 @@ impl Importer {
             *actor = serde_json::json!({ "type": kind, "name": name });
             Ok::<(), ()>(())
         });
-        params
+        Ok(params)
     }
 
     async fn status_checks(&mut self, ruleset: &str, params: &Json) -> Result<Json> {

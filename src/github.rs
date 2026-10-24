@@ -109,6 +109,14 @@ impl GitHub {
         }
     }
 
+    /// The HTTP status of a failed request made through this client, if GitHub answered.
+    pub fn status(err: &anyhow::Error) -> Option<u16> {
+        match err.downcast_ref::<octocrab::Error>()? {
+            octocrab::Error::GitHub { source, .. } => Some(source.status_code.as_u16()),
+            _ => None,
+        }
+    }
+
     /// Core rate limit (remaining, limit). `GET /rate_limit` does not consume the rate limit, so
     /// it is not counted as a call.
     pub async fn rate_limit(&self) -> Result<(u64, u64)> {

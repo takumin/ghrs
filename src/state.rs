@@ -13,7 +13,7 @@ use crate::diagnostic::{Code, Diagnostic, Diagnostics};
 use crate::model::{Rules, Ruleset};
 use crate::resolve::Directory;
 use crate::schema::{
-    ACTORS_WITHOUT_ID, PARAMETERIZED_RULES, REQUIRED_PARAMS, actor_type_to_api,
+    ACTORS_WITHOUT_ID, PARAMETERIZED_RULES, REQUIRED_PARAMS, actor_type_to_api, actor_type_to_toml,
     for_each_review_actor, review_actor_type_to_api, role_id, rule_defaults,
 };
 use crate::validate;
@@ -160,6 +160,7 @@ impl RulesetState {
 /// Rules are handled as follows.
 /// - Rules absent from the declaration are disabled (same as `false`)
 /// - Rules [`Rules`] does not know cannot be declared, so they keep their current values
+/// - Bypass actors of kinds ghrs does not know are kept for the same reason
 /// - Parameters not written in a rule's table inherit the current value. PUT is a full
 ///   replacement, so this avoids resetting parameters the declaration does not touch to defaults
 pub fn desired(
@@ -169,7 +170,7 @@ pub fn desired(
 ) -> Result<RulesetState> {
     let at = format!("ruleset \"{}\"", decl.name);
 
-    let actors = decl
+    let mut actors: Vec<Actor> = decl
         .bypass_actors
         .iter()
         .map(|a| {
@@ -193,6 +194,14 @@ pub fn desired(
             })
         })
         .collect::<Result<_>>()?;
+    // Kinds ghrs does not know cannot be declared, so they keep their current entries
+    actors.extend(
+        current
+            .into_iter()
+            .flat_map(|c| &c.actors)
+            .filter(|a| actor_type_to_toml(&a.actor_type).is_none())
+            .cloned(),
+    );
 
     let mut rules = BTreeMap::new();
     let mut missing_params = Vec::new();
@@ -543,6 +552,25 @@ mod tests {
         let want = desired(&decl(""), Some(&cur), &Directory::default()).unwrap();
         assert_eq!(want.rules.keys().collect::<Vec<_>>(), ["future_rule"]);
         assert_eq!(want.rules["future_rule"], Some(json!({ "x": 1 })));
+    }
+
+    /// A bypass actor kind ghrs does not know cannot be declared, so it must not be deleted
+    #[test]
+    fn unknown_bypass_actors_keep_current_values() {
+        let cur = RulesetState::from_api(&json!({
+            "id": 42, "name": "r", "target": "branch", "enforcement": "active",
+            "conditions": { "ref_name": { "include": [], "exclude": [] } },
+            "bypass_actors": [
+                { "actor_id": 7, "actor_type": "User", "bypass_mode": "always" },
+                { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" },
+            ],
+            "rules": [],
+        }))
+        .unwrap();
+        let want = desired(&decl(""), Some(&cur), &Directory::default()).unwrap();
+        assert_eq!(want.actors.len(), 1);
+        assert_eq!(want.actors[0].actor_type, "User");
+        assert_eq!(want.actors[0].actor_id, Some(7));
     }
 
     #[test]

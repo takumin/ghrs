@@ -46,6 +46,7 @@ ghrs apply
 ```
 
 The target repository is taken from `--repo OWNER/NAME`, then from `[meta]` in the declaration file, then from the git remote of the current directory.
+`import` reads no declaration file, so it skips `[meta]`.
 
 ## Commands
 
@@ -75,6 +76,7 @@ For an existing ruleset, that covers deleting it, disabling it, changing its tar
 Without a terminal, `apply` refuses to proceed unless `--yes` is given.
 
 `drift --exit-code` exits with status 2 when there is a difference, which is useful for scheduled checks in CI.
+Like `plan` without `--prune`, `drift` does not count undeclared rulesets, collaborators, and teams as a difference.
 
 ## JSON Schema
 
@@ -148,7 +150,7 @@ Actors are written by name (App slug, team slug, user login, role name), and ghr
 When running as a GitHub App, `integration = "self"` refers to that App.
 
 Rule parameters not written in a rule's table keep their current values.
-Rules and parameters that ghrs does not know yet (for example, ones GitHub added recently) cannot be declared; `import` leaves them out with a warning, and `plan` keeps them at their current values instead of removing them.
+Rules, parameters, and bypass actor types that ghrs does not know yet (for example, ones GitHub added recently) cannot be declared; `import` leaves them out with a warning, and `plan` keeps them at their current values instead of removing them.
 The exception is a parameter inside an element of an array (for example, an entry of `required_reviewers`): the element is sent as a whole, so `plan` shows its removal.
 
 Unknown keys are rejected, including rule names and rule parameters, so a misspelled key fails instead of being silently ignored.
@@ -158,6 +160,9 @@ A new rule missing a required parameter (for example, `merge_queue = true`) is r
 With `--json`, these errors are written to standard output as structured diagnostics with a code, a path, and a suggested fix.
 
 Rulesets inherited from the organization are not managed.
+
+ghrs assumes the GitHub Free plan.
+It rejects what needs a paid plan: rulesets on a private repository, `enforcement = "evaluate"`, `target = "push"`, and `visibility = "internal"`.
 
 ## Authentication
 
@@ -192,7 +197,8 @@ The toolchain is managed with [aqua](https://aquaproj.github.io/) and [Task](htt
 
 ```sh
 aqua install
-task          # format, lint, audit, test, doc, build
+task          # format, lint, dependency policy check, test, doc, build
+task audit    # the policy check and the RustSec advisory scan
 task test
 ```
 

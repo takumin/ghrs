@@ -190,6 +190,19 @@ async fn apply(args: ApplyArgs, auth: &AuthArgs) -> Result<ExitCode> {
     let confirmed = plan.steps.is_empty() || args.yes || confirm(&plan, &target)?;
     if !confirmed {
         note("apply cancelled\n");
+        if p.json {
+            // Every step is reported as skipped, so the output still parses as an apply result
+            let report = apply::Report(
+                plan.steps
+                    .iter()
+                    .map(|s| (s.label(), Outcome::Skipped))
+                    .collect(),
+            );
+            out(&format!(
+                "{}\n",
+                serde_json::to_string_pretty(&render::apply_json(&plan, &report))?
+            ))?;
+        }
         return Ok(ExitCode::FAILURE);
     }
 
