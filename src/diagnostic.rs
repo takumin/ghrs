@@ -84,6 +84,10 @@ codes! {
     PersonalCollaboratorPermission = "E0406",
     TeamOnPersonal = "E0407",
     EmptySlug = "E0408",
+    // E05xx: actions
+    AllowedActionsNotAllowed = "E0501",
+    WorkflowPermissionsNotAllowed = "E0502",
+    SelectedActionsNeedSelected = "E0503",
 }
 
 impl Serialize for Code {

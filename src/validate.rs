@@ -8,9 +8,10 @@ use crate::diagnostic::{Applicability, Code, Diagnostic, Diagnostics, Edit};
 use crate::model::{BypassActor, Config, ReviewActor, Rule, Ruleset};
 use crate::plan::Scope;
 use crate::schema::{
-    ACTORS_WITHOUT_ID, BRANCH_ONLY_RULES, BYPASS_MODES, ENFORCEMENTS, MAX_RULESETS, ORG_ONLY_RULES,
-    PERMISSIONS, PUSH_RULES, REPOSITORY_ROLES, ROLES_WITHOUT_WRITE, RULE_NAMES, TAG_ONLY_RULES,
-    TARGETS, VISIBILITIES, actor_type_names, actor_type_to_api, ref_patterns, role_id, rule_to_api,
+    ACTORS_WITHOUT_ID, ALLOWED_ACTIONS, BRANCH_ONLY_RULES, BYPASS_MODES, ENFORCEMENTS,
+    MAX_RULESETS, ORG_ONLY_RULES, PERMISSIONS, PUSH_RULES, REPOSITORY_ROLES, ROLES_WITHOUT_WRITE,
+    RULE_NAMES, TAG_ONLY_RULES, TARGETS, VISIBILITIES, WORKFLOW_PERMISSIONS, actor_type_names,
+    actor_type_to_api, ref_patterns, role_id, rule_to_api,
 };
 
 fn allowed(values: &[&str]) -> String {
@@ -240,6 +241,8 @@ pub fn check(config: &Config, app_auth: bool) -> Vec<Diagnostic> {
         );
     }
 
+    check_actions(config, &mut errors);
+
     if config.rulesets.len() > MAX_RULESETS {
         errors.push(
             Diagnostic::error(
@@ -303,6 +306,65 @@ pub fn check(config: &Config, app_auth: bool) -> Vec<Diagnostic> {
     }
 
     errors
+}
+
+fn check_actions(config: &Config, errors: &mut Vec<Diagnostic>) {
+    let actions = &config.actions;
+    for (key, value, values, code) in [
+        (
+            "allowed_actions",
+            &actions.allowed_actions,
+            ALLOWED_ACTIONS,
+            Code::AllowedActionsNotAllowed,
+        ),
+        (
+            "default_workflow_permissions",
+            &actions.default_workflow_permissions,
+            WORKFLOW_PERMISSIONS,
+            Code::WorkflowPermissionsNotAllowed,
+        ),
+    ] {
+        if let Some(value) = value
+            && !values.contains(&value.as_str())
+        {
+            errors.push(
+                Diagnostic::error(code, format!("actions.{key} \"{value}\" is not allowed"))
+                    .at(format!("actions.{key}"))
+                    .help(allowed(values)),
+            );
+        }
+    }
+
+    // GitHub rejects selected_actions with 409 under any other allowed_actions (observed: GET).
+    // Relying on the current value instead would make the declaration's meaning depend on it
+    // An unknown allowed_actions is reported above, with its allowed values
+    let known = actions
+        .allowed_actions
+        .as_deref()
+        .is_none_or(|value| ALLOWED_ACTIONS.contains(&value));
+    if actions.selected_actions.is_some()
+        && known
+        && actions.allowed_actions.as_deref() != Some("selected")
+    {
+        let path = "actions.allowed_actions";
+        let d = Diagnostic::error(
+            Code::SelectedActionsNeedSelected,
+            "actions.selected_actions needs actions.allowed_actions = \"selected\"",
+        );
+        errors.push(match &actions.allowed_actions {
+            // It may change the policy GitHub has now, so it is not machine-applicable
+            None => d.at(path).help("declare the policy it belongs to").fix(
+                Applicability::MaybeIncorrect,
+                Edit::Set {
+                    path: path.to_string(),
+                    value: json!("selected"),
+                },
+            ),
+            Some(_) => d
+                .at(path)
+                .help("set allowed_actions to \"selected\", or remove actions.selected_actions"),
+        });
+    }
 }
 
 fn check_permission(
@@ -901,18 +963,21 @@ mod tests {
 
     const ALL: Scope = Scope {
         repository: true,
+        actions: true,
         rulesets: true,
         collaborators: true,
         teams: true,
     };
     const ACCESS: Scope = Scope {
         repository: false,
+        actions: false,
         rulesets: false,
         collaborators: true,
         teams: true,
     };
     const REPOSITORY: Scope = Scope {
         repository: true,
+        actions: true,
         rulesets: false,
         collaborators: false,
         teams: false,
@@ -1287,6 +1352,48 @@ name = "owner"
     }
 
     #[test]
+    fn checks_actions() {
+        let codes = |toml: &str| errors(toml).iter().map(|d| d.code).collect::<Vec<_>>();
+        assert!(
+            codes(
+                "[actions]\nallowed_actions = \"selected\"\n\
+                default_workflow_permissions = \"read\"\n\
+                [actions.selected_actions]\npatterns_allowed = [\"aquaproj/*\"]"
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            codes("[actions]\nallowed_actions = \"any\"\ndefault_workflow_permissions = \"admin\""),
+            [
+                Code::AllowedActionsNotAllowed,
+                Code::WorkflowPermissionsNotAllowed
+            ]
+        );
+        // Reported once, by the unknown value
+        assert_eq!(
+            codes("[actions]\nallowed_actions = \"any\"\n[actions.selected_actions]"),
+            [Code::AllowedActionsNotAllowed]
+        );
+
+        let d = errors("[actions.selected_actions]\nverified_allowed = true");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].code, Code::SelectedActionsNeedSelected);
+        assert_eq!(
+            d[0].fix,
+            Some(Fix {
+                applicability: Applicability::MaybeIncorrect,
+                edit: Edit::Set {
+                    path: "actions.allowed_actions".to_string(),
+                    value: json!("selected"),
+                },
+            })
+        );
+        let d = errors("[actions]\nallowed_actions = \"all\"\n[actions.selected_actions]");
+        assert_eq!(d[0].code, Code::SelectedActionsNeedSelected);
+        assert_eq!(d[0].fix, None);
+    }
+
+    #[test]
     fn checks_collaborators_and_teams() {
         let toml = r#"
 [collaborator.Alice]
@@ -1492,6 +1599,7 @@ permission = "maintain"
         // The declared visibility is not applied, so the current one decides
         let rulesets = Scope {
             repository: false,
+            actions: false,
             rulesets: true,
             collaborators: false,
             teams: false,
