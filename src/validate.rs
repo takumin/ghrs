@@ -5,7 +5,6 @@ use serde_json::{Value as Json, json};
 use std::collections::HashSet;
 
 use crate::diagnostic::{Applicability, Code, Diagnostic, Diagnostics, Edit};
-use crate::explain;
 use crate::model::{BypassActor, Config, ReviewActor, Rule, Ruleset};
 use crate::plan::Scope;
 use crate::schema::{
@@ -14,6 +13,7 @@ use crate::schema::{
     REPOSITORY_ROLES, ROLES_WITHOUT_WRITE, RULE_NAMES, TAG_ONLY_RULES, TARGETS, VISIBILITIES,
     WORKFLOW_PERMISSIONS, actor_type_names, actor_type_to_api, ref_patterns, role_id, rule_to_api,
 };
+use crate::{document, explain};
 
 fn allowed(values: &[&str]) -> String {
     format!("allowed values: {}", values.join(" / "))
@@ -43,9 +43,10 @@ fn remove(path: &str) -> Edit {
 pub fn parse(text: &str) -> Result<Config, Diagnostics> {
     let one = |d| Diagnostics::new(vec![d]);
     let de = toml::Deserializer::parse(text).map_err(|err| {
-        one(Diagnostic::error(
-            Code::InvalidToml,
-            with_position(err.message(), err.span(), text),
+        one(with_location(
+            Diagnostic::error(Code::InvalidToml, err.message()),
+            err.span(),
+            text,
         ))
     })?;
     serde_path_to_error::deserialize(de).map_err(|err| one(deserialize_error(err, text)))
@@ -67,7 +68,11 @@ fn deserialize_error(err: serde_path_to_error::Error<toml::de::Error>, text: &st
     let err = err.into_inner();
     let message = err.message();
     let Some(expected) = message.strip_prefix("unknown field `").map(expected_keys) else {
-        let d = Diagnostic::error(Code::InvalidValue, with_position(message, err.span(), text));
+        let d = with_location(
+            Diagnostic::error(Code::InvalidValue, message),
+            err.span(),
+            text,
+        );
         return match path {
             Some(path) => d.at(path),
             None => d,
@@ -129,18 +134,12 @@ fn renamed(keys: &[&str]) -> Option<&'static str> {
     }
 }
 
-/// Append the line and column of `span` to `message`.
-fn with_position(message: &str, span: Option<std::ops::Range<usize>>, text: &str) -> String {
-    let Some(span) = span else {
-        return message.to_string();
-    };
-    let before = &text[..span.start.min(text.len())];
-    let line = before.matches('\n').count() + 1;
-    let column = before[before.rfind('\n').map_or(0, |i| i + 1)..]
-        .chars()
-        .count()
-        + 1;
-    format!("{message} (line {line}, column {column})")
+/// Set where `span` starts as the location of `d`.
+fn with_location(d: Diagnostic, span: Option<std::ops::Range<usize>>, text: &str) -> Diagnostic {
+    match span {
+        Some(span) => d.located(document::location(text, span.start)),
+        None => d,
+    }
 }
 
 /// Render a deserialization path the way diagnostics write paths (`ruleset."release/*".rules`).
@@ -1229,7 +1228,7 @@ checks = [{ context = "test" }, { context = "build", integration = "github-actio
             d.path.as_deref(),
             Some("ruleset.r.rules.restrict_deletions")
         );
-        assert!(d.message.contains("line 5"), "{}", d.message);
+        assert_eq!(d.location.map(|l| l.line), Some(5), "{d:?}");
 
         let d = parse_error(&ruleset("[ruleset.r.rules]\npull_request = \"yes\""));
         assert!(
@@ -1248,7 +1247,7 @@ checks = [{ context = "test" }, { context = "build", integration = "github-actio
         let d = parse_error("[repository]\n[ruleset\n");
         assert_eq!(d.code, Code::InvalidToml);
         assert!(d.path.is_none());
-        assert!(d.message.contains("line 2"), "{}", d.message);
+        assert_eq!(d.location.map(|l| l.line), Some(2), "{d:?}");
     }
 
     #[test]

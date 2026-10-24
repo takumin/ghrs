@@ -7,7 +7,7 @@
 use serde::Serialize;
 use serde_json::Value as Json;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::schema;
 
@@ -145,6 +145,13 @@ pub struct Fix {
     pub edit: Edit,
 }
 
+/// Line and column in the declaration file, both 1-based. The column counts characters.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Location {
+    pub line: usize,
+    pub column: usize,
+}
+
 #[derive(Serialize, Debug)]
 pub struct Diagnostic {
     pub code: Code,
@@ -154,6 +161,10 @@ pub struct Diagnostic {
     /// file-wide diagnostics
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Where `path` is written, or where the file fails to parse. For a path that is not written,
+    /// the closest table above it that is
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<Location>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -179,6 +190,7 @@ impl Diagnostic {
             severity,
             message: message.into(),
             path: None,
+            location: None,
             help: None,
             fix: None,
             reference: None,
@@ -189,6 +201,11 @@ impl Diagnostic {
         let path = path.into();
         self.reference = schema::rule_reference(&path);
         self.path = Some(path);
+        self
+    }
+
+    pub fn located(mut self, location: Location) -> Self {
+        self.location = Some(location);
         self
     }
 
@@ -206,14 +223,33 @@ impl Diagnostic {
     }
 }
 
-impl fmt::Display for Diagnostic {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let severity = match self.severity {
+impl Diagnostic {
+    pub fn severity(&self) -> &'static str {
+        match self.severity {
             Severity::Error => "error",
             Severity::Warning => "warning",
-        };
-        write!(f, "{severity}[{}]: {}", self.code.as_str(), self.message)?;
-        if let Some(path) = &self.path {
+        }
+    }
+
+    /// Like `Display`, with the location prefixed by `file` as `file:line:column`.
+    fn render(&self, f: &mut fmt::Formatter<'_>, file: Option<&Path>) -> fmt::Result {
+        write!(
+            f,
+            "{}[{}]: {}",
+            self.severity(),
+            self.code.as_str(),
+            self.message
+        )?;
+        if let Some(Location { line, column }) = self.location {
+            write!(f, "\n  --> ")?;
+            if let Some(file) = file {
+                write!(f, "{}:", file.display())?;
+            }
+            write!(f, "{line}:{column}")?;
+            if let Some(path) = &self.path {
+                write!(f, " ({path})")?;
+            }
+        } else if let Some(path) = &self.path {
             write!(f, "\n  --> {path}")?;
         }
         if let Some(help) = &self.help {
@@ -235,6 +271,12 @@ impl fmt::Display for Diagnostic {
             write!(f, "\n  = reference: {reference}")?;
         }
         Ok(())
+    }
+}
+
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.render(f, None)
     }
 }
 
@@ -260,7 +302,8 @@ impl Diagnostics {
 impl fmt::Display for Diagnostics {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for diagnostic in &self.diagnostics {
-            write!(f, "{diagnostic}\n\n")?;
+            diagnostic.render(f, self.file.as_deref())?;
+            write!(f, "\n\n")?;
         }
         let plural = |n| if n == 1 { "" } else { "s" };
         let warnings = self

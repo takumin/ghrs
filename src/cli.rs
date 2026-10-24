@@ -69,7 +69,7 @@ impl Command {
             Command::Plan(args) => args.json,
             Command::Apply(args) => args.plan.json,
             Command::Drift(args) => args.json,
-            Command::Lint(args) => args.json,
+            Command::Lint(args) => args.json || args.format == Format::Json,
             Command::Import(_)
             | Command::Schema(_)
             | Command::Explain(_)
@@ -207,9 +207,28 @@ pub struct LintArgs {
     #[arg(long)]
     pub strict: bool,
 
-    /// Output JSON
+    /// Output format
+    #[arg(
+        long,
+        value_name = "FORMAT",
+        default_value = "text",
+        conflicts_with = "json"
+    )]
+    pub format: Format,
+
+    /// Output JSON (same as --format json)
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Format {
+    /// Human-readable, to standard error
+    Text,
+    /// JSON, to standard output
+    Json,
+    /// GitHub Actions workflow commands, which annotate the file in pull requests
+    Github,
 }
 
 #[derive(Clone, Copy, ValueEnum)]

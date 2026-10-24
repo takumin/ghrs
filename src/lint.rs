@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::diagnostic::{Diagnostics, Severity};
 use crate::plan::Scope;
-use crate::{undeclared, validate};
+use crate::{document, undeclared, validate};
 
 /// What plan would read from the repository on GitHub. `None` is not known.
 pub struct Context {
@@ -35,6 +35,65 @@ impl Report {
 }
 
 pub fn run(text: &str, context: &Context) -> Report {
+    let mut report = check(text, context);
+    document::locate(&mut report.diagnostics.diagnostics, text);
+    report
+}
+
+/// The reports as GitHub Actions workflow commands, which annotate the lines of the files in pull
+/// requests and in the run summary.
+pub fn github(reports: &[Report]) -> String {
+    let mut out = String::new();
+    for report in reports {
+        let file = report
+            .diagnostics
+            .file
+            .as_deref()
+            .map(|file| file.display().to_string());
+        let file = file.as_deref().unwrap_or_default();
+        for d in &report.diagnostics.diagnostics {
+            let mut properties = format!("file={}", property(file));
+            if let Some(location) = d.location {
+                properties.push_str(&format!(",line={},col={}", location.line, location.column));
+            }
+            properties.push_str(&format!(",title={}", property(d.code.as_str())));
+            let mut message = d.message.clone();
+            if let Some(path) = &d.path {
+                message.push_str(&format!("\n--> {path}"));
+            }
+            if let Some(help) = &d.help {
+                message.push_str(&format!("\nhelp: {help}"));
+            }
+            out.push_str(&format!(
+                "::{} {properties}::{}\n",
+                d.severity(),
+                data(&message)
+            ));
+        }
+        for skipped in &report.skipped {
+            out.push_str(&format!(
+                "::notice file={},title=skipped::{}\n",
+                property(file),
+                data(&format!("skipped {skipped}"))
+            ));
+        }
+    }
+    out
+}
+
+/// Escape the message of a workflow command.
+fn data(s: &str) -> String {
+    s.replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+}
+
+/// Escape a property value of a workflow command.
+fn property(s: &str) -> String {
+    data(s).replace(':', "%3A").replace(',', "%2C")
+}
+
+fn check(text: &str, context: &Context) -> Report {
     let config = match validate::parse(text) {
         Ok(config) => config,
         Err(diagnostics) => {
@@ -243,5 +302,38 @@ mod tests {
             ..UNKNOWN
         };
         assert!(codes(text, &private).contains(&Code::UnusedUnmanaged));
+    }
+
+    #[test]
+    fn reports_locations() {
+        let text = "[repository]\nhas_wiki = false\nvisibility = \"internal\"\n";
+        let report = run(text, &UNKNOWN);
+        let d = report
+            .diagnostics
+            .diagnostics
+            .iter()
+            .find(|d| d.code == Code::VisibilityNotAllowed)
+            .unwrap();
+        assert_eq!(d.location.map(|l| (l.line, l.column)), Some((3, 1)));
+    }
+
+    #[test]
+    fn writes_workflow_commands() {
+        let mut report = run("[repository]\nhas_issue = true\n", &UNKNOWN);
+        report.diagnostics.file = Some("dir,a:b/.ghrs.toml".into());
+        let out = github(&[report]);
+        let mut lines = out.lines();
+        assert_eq!(
+            lines.next(),
+            Some(
+                "::error file=dir%2Ca%3Ab/.ghrs.toml,line=2,col=1,title=E0002::unknown key \
+                `has_issue`%0A--> repository.has_issue%0Ahelp: did you mean `has_issues`?"
+            )
+        );
+        assert!(
+            lines.all(
+                |line| line.starts_with("::notice file=dir%2Ca%3Ab/.ghrs.toml,title=skipped::")
+            )
+        );
     }
 }

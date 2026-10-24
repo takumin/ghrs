@@ -7,6 +7,7 @@ mod auth;
 mod cli;
 mod diagnostic;
 mod diff;
+mod document;
 mod explain;
 mod github;
 mod import;
@@ -310,23 +311,32 @@ fn lint(args: LintArgs) -> Result<ExitCode> {
         visibility: args.visibility.map(cli::Visibility::as_str),
         strict: args.strict,
     };
+    let format = if args.json {
+        cli::Format::Json
+    } else {
+        args.format
+    };
     let mut reports = Vec::new();
     for path in &args.paths {
-        let mut report = lint::run(&read_config(path)?, &context);
+        let text = read_config(path)?;
+        let mut report = lint::run(&text, &context);
         report.diagnostics.file = Some(path.clone());
         reports.push(report);
     }
     let failed = reports.iter().any(lint::Report::failed);
 
-    if args.json {
-        out(&format!("{}\n", serde_json::to_string_pretty(&reports)?))?;
-    } else {
-        for (path, report) in args.paths.iter().zip(&reports) {
-            if !report.diagnostics.diagnostics.is_empty() {
-                note(&format!("{}\n", report.diagnostics));
-            }
-            for skipped in &report.skipped {
-                note(&format!("note: {}: skipped {skipped}\n", path.display()));
+    match format {
+        cli::Format::Json => out(&format!("{}\n", serde_json::to_string_pretty(&reports)?))?,
+        cli::Format::Github => out(&lint::github(&reports))?,
+        cli::Format::Text => {
+            for report in &reports {
+                if !report.diagnostics.diagnostics.is_empty() {
+                    note(&format!("{}\n", report.diagnostics));
+                }
+                for skipped in &report.skipped {
+                    let file = report.diagnostics.file.as_deref().unwrap_or(Path::new(""));
+                    note(&format!("note: {}: skipped {skipped}\n", file.display()));
+                }
             }
         }
     }
@@ -347,12 +357,13 @@ async fn compute_plan(
     strict: bool,
     auth: &AuthArgs,
 ) -> Result<(GitHub, RepoRef, plan::Plan)> {
-    let config = load_config(path)?;
+    let text = read_config(path)?;
+    let config = validate::parse(&text).map_err(|d| in_file(d.into(), path, &text))?;
     // Report declaration errors before reading credentials, which may run `op` or `gh`. Only
     // `self` depends on the credential, so it is checked once the credential is known
     let invalid = |is_app| {
         let errors = validate::check(&config, is_app);
-        (!errors.is_empty()).then(|| in_file(Diagnostics::new(errors).into(), path))
+        (!errors.is_empty()).then(|| in_file(Diagnostics::new(errors).into(), path, &text))
     };
     if let Some(err) = invalid(true) {
         return Err(err);
@@ -374,14 +385,15 @@ async fn compute_plan(
         self_app.as_ref(),
     )
     .await
-    .map_err(|err| in_file(err, path))?;
+    .map_err(|err| in_file(err, path, &text))?;
     Ok((gh, target, plan))
 }
 
-/// Attach the declaration file path to validation errors.
-fn in_file(err: anyhow::Error, path: &Path) -> anyhow::Error {
+/// Attach the declaration file path, and where in `text` each error is, to validation errors.
+fn in_file(err: anyhow::Error, path: &Path, text: &str) -> anyhow::Error {
     match err.downcast::<Diagnostics>() {
         Ok(mut diagnostics) => {
+            document::locate(&mut diagnostics.diagnostics, text);
             diagnostics.file = Some(path.to_path_buf());
             diagnostics.into()
         }
@@ -411,11 +423,6 @@ fn confirm(plan: &plan::Plan, target: &RepoRef) -> Result<bool> {
     let mut answer = String::new();
     std::io::stdin().lock().read_line(&mut answer)?;
     Ok(answer.trim() == expected)
-}
-
-fn load_config(path: &Path) -> Result<Config> {
-    let text = read_config(path)?;
-    validate::parse(&text).map_err(|d| in_file(d.into(), path))
 }
 
 fn read_config(path: &Path) -> Result<String> {

@@ -89,7 +89,9 @@ Without them, the checks that depend on them are skipped with a note, and `meta.
 `integration = "self"` is accepted, since the credential is not known.
 Unwritten settings are reported as warnings (`W0101`), which do not change the exit status; `--strict` turns them into errors as in `plan`.
 When the owner type or the visibility is not known, a setting is reported as unwritten only when it is a setting either way, and a `meta.unmanaged` entry is reported as covering nothing only when it covers nothing either way.
+Each diagnostic gives the line and column where its key is written, or, for an unwritten setting, where the closest table above it is.
 With `--json`, it writes an array with the file, its diagnostics, and the checks it skipped, for each file.
+`--format github` writes them as GitHub Actions workflow commands instead, which annotate the lines in pull requests.
 
 ## JSON Schema
 
