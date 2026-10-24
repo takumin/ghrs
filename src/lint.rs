@@ -5,6 +5,8 @@
 use serde::Serialize;
 
 use crate::diagnostic::{Applicability, Diagnostics, Severity};
+use crate::lints::{self, Levels};
+use crate::model::LintLevels;
 use crate::plan::Scope;
 use crate::{document, undeclared, validate};
 
@@ -17,6 +19,8 @@ pub struct Context {
     /// The current visibility. A declared `repository.visibility` takes precedence, as in plan
     pub visibility: Option<&'static str>,
     pub strict: bool,
+    /// Levels from the flags, which override those of `meta.lint`
+    pub levels: LintLevels,
 }
 
 #[derive(Serialize)]
@@ -190,9 +194,11 @@ fn check(text: &str, context: &Context) -> Report {
     } else {
         undeclared::warnings(&paths)
     });
+    diagnostics.extend(lints::find(&config));
+    let levels = Levels::new(&[&config.meta.lint, &context.levels]);
 
     Report {
-        diagnostics: Diagnostics::new(diagnostics),
+        diagnostics: Diagnostics::new(levels.apply(diagnostics)),
         skipped,
     }
 }
@@ -206,6 +212,11 @@ mod tests {
         owned_by_org: None,
         visibility: None,
         strict: false,
+        levels: LintLevels {
+            allow: Vec::new(),
+            warn: Vec::new(),
+            deny: Vec::new(),
+        },
     };
 
     fn codes(text: &str, context: &Context) -> Vec<Code> {

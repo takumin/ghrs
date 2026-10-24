@@ -45,6 +45,7 @@ codes! {
     UnknownUnmanaged = "E0105",
     UnusedUnmanaged = "E0106",
     UndeclaredSetting = "E0107",
+    UnknownLint = "E0108",
     // E02xx: ruleset
     // E0201 (duplicate ruleset name) is retired: rulesets are keyed by name, so TOML itself
     // rejects a duplicate
@@ -94,8 +95,24 @@ codes! {
     ForkPrApprovalNotAllowed = "E0504",
     ForkPrApprovalOnPrivate = "E0505",
     ClaimKeysNeedCustomTemplate = "E0506",
-    // W01xx: lints on repository-wide settings. Only `lint` reports them
+    // Wxxxx: lints, which only `lint` reports, at the level `meta.lint` and its flags give.
+    // Numbered like the errors: W01xx repository-wide, W02xx ruleset, W03xx bypass actors, W05xx
+    // actions
     UnwrittenSetting = "W0101",
+    DisabledRuleset = "W0201",
+    DefaultBranchDeletable = "W0202",
+    DefaultBranchForcePushable = "W0203",
+    NoRequiredApprovals = "W0205",
+    BypassAlways = "W0301",
+    AdminBypassAlways = "W0302",
+    AllActionsAllowed = "W0501",
+    ShaPinningNotRequired = "W0502",
+    WriteWorkflowPermissions = "W0503",
+    ActionsCanApprove = "W0504",
+    MutableOidcSubject = "W0505",
+    WildcardActionPattern = "W0506",
+    LenientForkPrApproval = "W0507",
+    VerifiedActionsAllowed = "W0508",
 }
 
 impl Serialize for Code {

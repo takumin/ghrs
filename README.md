@@ -98,6 +98,45 @@ With `--json`, it writes an array with the file, its diagnostics, and the checks
 Comments and formatting are kept, though a comment on an element that is removed may stay behind.
 Like `plan`, validation stops at the first error in parsing the file, so the fixes for the rest show up once that error is fixed.
 
+### Lints
+
+Besides validation, `lint` reports declarations GitHub accepts but that likely weaken protection.
+Each lint has a code and a level: `allow` does not report it, `warn` reports it as a warning, and `deny` as an error, which fails `lint`.
+Only values written are checked, since an unwritten one keeps a current value `lint` does not know.
+
+| Code | Group | Default | Reports |
+| --- | --- | --- | --- |
+| `W0101` | | warn | A setting left unwritten |
+| `W0201` | security | warn | A disabled ruleset |
+| `W0202` | security | warn | `restrict_deletions = false` on a ruleset covering the default branch, with no other ruleset enabling it |
+| `W0203` | security | warn | The same for `block_force_pushes` |
+| `W0301` | security | warn | A bypass actor other than admins with `mode = "always"` or `"exempt"` |
+| `W0501` | security | warn | `allowed_actions = "all"` |
+| `W0502` | security | warn | `sha_pinning_required = false` |
+| `W0503` | security | warn | `default_workflow_permissions = "write"` |
+| `W0504` | security | warn | `can_approve_pull_request_reviews = true` |
+| `W0505` | security | warn | `use_immutable_subject = false` |
+| `W0506` | security | warn | A pattern in `patterns_allowed` that allows any owner, such as `*/*` |
+| `W0507` | security | warn | `fork_pr_contributor_approval = "first_time_contributors_new_to_github"` |
+| `W0205` | pedantic | allow | `required_approving_review_count = 0` |
+| `W0302` | pedantic | allow | Admins bypassing with `mode = "always"` or `"exempt"`, which they can do anyway by disabling the ruleset |
+| `W0508` | pedantic | allow | `verified_allowed = true` |
+
+Levels are given to a code, a group, `all`, or `warnings`, which stands for every lint at warn at that point.
+`meta.lint` sets them in the file, and `--allow` (`-A`), `--warn` (`-W`), and `--deny` (`-D`) override it.
+A code takes precedence over its group and a group over `all`, and of the levels one name is given, the strictest.
+
+```toml
+[meta.lint]
+allow = ["W0201"]      # a ruleset kept disabled on purpose
+deny = ["security"]
+```
+
+```sh
+ghrs lint -W pedantic  # also report the pedantic lints
+ghrs lint -D warnings  # fail on any warning, as in CI
+```
+
 ## JSON Schema
 
 `ghrs schema` writes the JSON Schema of the declaration file, which editors and coding agents can use to find the allowed keys and values.

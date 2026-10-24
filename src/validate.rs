@@ -13,7 +13,7 @@ use crate::schema::{
     REPOSITORY_ROLES, ROLES_WITHOUT_WRITE, RULE_NAMES, TAG_ONLY_RULES, TARGETS, VISIBILITIES,
     WORKFLOW_PERMISSIONS, actor_type_names, actor_type_to_api, ref_patterns, role_id, rule_to_api,
 };
-use crate::{document, explain};
+use crate::{document, explain, lints};
 
 fn allowed(values: &[&str]) -> String {
     format!("allowed values: {}", values.join(" / "))
@@ -169,7 +169,7 @@ fn expected_keys(rest: &str) -> Vec<&str> {
 /// The allowed key `key` was most likely meant to be. Like rustc, accept an edit distance up to a
 /// third of the key's length, or a key that `key` is the only prefix of
 /// (`allow_rebase` -> `allow_rebase_merge`).
-fn similar<'a>(key: &str, candidates: &[&'a str]) -> Option<&'a str> {
+pub fn similar<'a>(key: &str, candidates: &[&'a str]) -> Option<&'a str> {
     let limit = (key.len() / 3).max(1);
     let closest = candidates
         .iter()
@@ -253,6 +253,7 @@ pub fn check(config: &Config, app_auth: bool) -> Vec<Diagnostic> {
         );
     }
 
+    errors.extend(lints::check_names(&config.meta.lint));
     check_actions(config, &mut errors);
 
     if config.rulesets.len() > MAX_RULESETS {

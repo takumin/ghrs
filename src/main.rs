@@ -12,6 +12,7 @@ mod explain;
 mod github;
 mod import;
 mod lint;
+mod lints;
 mod model;
 mod plan;
 mod render;
@@ -310,7 +311,23 @@ fn lint(args: LintArgs) -> Result<ExitCode> {
         owned_by_org: args.owner_type.map(|t| matches!(t, cli::OwnerType::Org)),
         visibility: args.visibility.map(cli::Visibility::as_str),
         strict: args.strict,
+        levels: model::LintLevels {
+            allow: args.allow,
+            warn: args.warn,
+            deny: args.deny,
+        },
     };
+    if let Some(name) = [
+        &context.levels.allow,
+        &context.levels.warn,
+        &context.levels.deny,
+    ]
+    .into_iter()
+    .flatten()
+    .find(|name| !lints::is_name(name))
+    {
+        bail!("\"{name}\" is not a lint; write a lint code such as W0301, or a group");
+    }
     let format = if args.json {
         cli::Format::Json
     } else {

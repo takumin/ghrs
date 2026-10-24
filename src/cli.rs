@@ -207,6 +207,19 @@ pub struct LintArgs {
     #[arg(long)]
     pub strict: bool,
 
+    /// Lints not to report, by code or group (overrides meta.lint)
+    #[arg(short = 'A', long, value_name = "LINT,...", value_delimiter = ',')]
+    pub allow: Vec<String>,
+
+    /// Lints to report as warnings, by code or group (overrides meta.lint)
+    #[arg(short = 'W', long, value_name = "LINT,...", value_delimiter = ',')]
+    pub warn: Vec<String>,
+
+    /// Lints to report as errors, by code or group (overrides meta.lint); `warnings` makes every
+    /// warning an error
+    #[arg(short = 'D', long, value_name = "LINT,...", value_delimiter = ',')]
+    pub deny: Vec<String>,
+
     /// Apply the suggested fixes that keep the meaning of the declaration, and write the file
     #[arg(long)]
     pub fix: bool,
