@@ -26,7 +26,6 @@ pub fn drift_text(plan: &Plan) -> String {
             plan.repository
         );
     }
-    out.push_str(&undeclared_note(plan));
     out
 }
 
@@ -44,19 +43,6 @@ pub fn drift_json(plan: &Plan) -> Json {
         "undeclared": plan.undeclared,
         "warnings": plan.warnings,
     })
-}
-
-/// Settings that are neither written nor listed in meta.unmanaged. Empty when there are none.
-fn undeclared_note(plan: &Plan) -> String {
-    if plan.undeclared.is_empty() {
-        return String::new();
-    }
-    format!(
-        "\nNote: {} unwritten setting(s) ({}) left unchanged; write them, or list them in \
-        meta.unmanaged\n",
-        plan.undeclared.len(),
-        plan.undeclared.join(", ")
-    )
 }
 
 fn symbol(action: Action) -> &'static str {
@@ -151,7 +137,6 @@ pub fn text(plan: &Plan, verbose: bool) -> String {
             plan.ignored.join(", ")
         );
     }
-    out.push_str(&undeclared_note(plan));
 
     let s = &plan.summary;
     if !out.is_empty() {

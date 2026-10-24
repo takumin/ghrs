@@ -10,7 +10,7 @@ use crate::model::{
     Rules, SelectedActions,
 };
 use crate::plan::Scope;
-use crate::schema::rule_to_api;
+use crate::schema::{PARAMETERIZED_RULES, rule_to_api, rule_to_toml};
 use crate::validate::entry_path;
 
 /// The settings left unwritten and not covered by `meta.unmanaged`, as key paths. A table with no
@@ -67,7 +67,18 @@ pub fn find(config: &Config, owned_by_org: bool, public: bool) -> (Vec<String>, 
 
     for ruleset in &config.rulesets {
         let base = entry_path("ruleset", &ruleset.name);
-        for (rule, value) in ruleset.rules.entries() {
+        let entries = ruleset.rules.entries();
+        let rules: Vec<&str> = Rules::applicable(&ruleset.target, owned_by_org)
+            .map(rule_to_toml)
+            .collect();
+        walker.table(
+            &format!("{base}.rules"),
+            &Json::Object(entries.clone()),
+            &rules,
+            &[],
+            &[],
+        );
+        for (rule, value) in entries {
             // A disabled rule has no parameters to keep
             if value == Json::Bool(false) {
                 continue;
@@ -132,14 +143,18 @@ pub fn strict(paths: &[String]) -> Vec<Diagnostic> {
     paths
         .iter()
         .map(|path| {
-            // A rule reported as a whole is enabled, with `true` or an empty table
+            // A rule reported as a whole is unwritten, or enabled with `true` or an empty table
             let rule = path
                 .rsplit_once(".rules.")
-                .is_some_and(|(_, rule)| !rule.contains('.'));
-            let what = if rule {
-                "write its parameters in a table (`true` keeps the current ones)"
-            } else {
-                "write it out"
+                .map(|(_, rule)| rule)
+                .filter(|rule| !rule.contains('.'));
+            let what = match rule {
+                Some(rule) if PARAMETERIZED_RULES.contains(&rule_to_api(rule)) => {
+                    "write `false` to disable it, or its parameters in a table to enable it \
+                    (`true` keeps the current ones)"
+                }
+                Some(_) => "write `true` or `false`",
+                None => "write it out",
             };
             Diagnostic::error(
                 Code::UndeclaredSetting,
@@ -301,14 +316,13 @@ mod tests {
             require_last_push_approval = true\nrequired_approving_review_count = 1\n\
             required_review_thread_resolution = true\n";
         let (paths, _) = find_in(text, false);
-        assert_eq!(
-            &paths[2..],
-            [
-                "ruleset.main.rules.pull_request.required_reviewers",
-                "ruleset.main.rules.restrict_updates",
-                "ruleset.main.rules.workflows",
-            ]
-        );
+        for path in [
+            "ruleset.main.rules.pull_request.required_reviewers",
+            "ruleset.main.rules.restrict_updates",
+            "ruleset.main.rules.workflows",
+        ] {
+            assert!(paths.contains(&path.into()), "{path}");
+        }
 
         let (paths, _) = find_in(text, true);
         assert!(paths.contains(&"ruleset.main.rules.pull_request.dismissal_restriction".into()));
@@ -339,5 +353,38 @@ mod tests {
                 "meta.unmanaged[3]"
             ]
         );
+    }
+
+    #[test]
+    fn reports_unwritten_rules_the_ruleset_can_have() {
+        let text = "[ruleset.main]\ntarget = \"branch\"\nenforcement = \"active\"\n\
+            [ruleset.main.rules]\nrestrict_deletions = true\ncopilot_code_review = false\n\
+            [ruleset.tags]\ntarget = \"tag\"\nenforcement = \"active\"\n";
+        let (paths, _) = find_in(text, false);
+        assert!(paths.contains(&"ruleset.main.rules.restrict_creations".into()));
+        // Written, enabled or disabled
+        assert!(!paths.contains(&"ruleset.main.rules.restrict_deletions".into()));
+        assert!(!paths.contains(&"ruleset.main.rules.copilot_code_review".into()));
+        // For the other target, or for Organizations only
+        assert!(!paths.contains(&"ruleset.main.rules.tag_name_pattern".into()));
+        assert!(!paths.contains(&"ruleset.main.rules.merge_queue".into()));
+        // A ruleset with no rule written is reported as the table
+        assert!(paths.contains(&"ruleset.tags.rules".into()));
+        assert!(!paths.iter().any(|p| p.starts_with("ruleset.tags.rules.")));
+
+        let (paths, _) = find_in(text, true);
+        assert!(paths.contains(&"ruleset.main.rules.merge_queue".into()));
+    }
+
+    #[test]
+    fn unmanaged_covers_unwritten_rules() {
+        let text = "[meta]\nunmanaged = [\"ruleset.main.rules.code_quality\", \"ruleset.tags\"]\n\
+            [ruleset.main]\ntarget = \"branch\"\nenforcement = \"active\"\n\
+            [ruleset.tags]\ntarget = \"tag\"\nenforcement = \"active\"\n";
+        let (paths, errors) = find_in(text, false);
+        assert!(!paths.contains(&"ruleset.main.rules.code_quality".into()));
+        assert!(paths.contains(&"ruleset.main.rules.code_coverage".into()));
+        assert!(!paths.iter().any(|p| p.starts_with("ruleset.tags")));
+        assert!(errors.is_empty());
     }
 }

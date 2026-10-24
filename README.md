@@ -167,7 +167,7 @@ bypass_actors = [
 include = ["~DEFAULT_BRANCH"]
 exclude = []
 
-# Rules not listed here are disabled.
+# Rules not listed here keep their current state; `false` disables a rule.
 [ruleset.main.rules]
 restrict_deletions = true   # only bypass actors can delete the branch
 block_force_pushes = true
@@ -186,12 +186,12 @@ permission = "push"      # pull, triage, push, maintain, admin
 permission = "maintain"
 ```
 
-Settings ghrs knows but the file leaves unwritten keep their current values: fields of `[repository]` and `[actions]`, and parameters of an enabled rule, including every parameter of a rule written as `true`.
-`plan`, `apply`, and `drift` list them in a note (`undeclared` with `--json`), naming a table as a whole when none of its keys is written.
+Settings ghrs knows but the file leaves unwritten keep their current values: fields of `[repository]` and `[actions]`, rules a ruleset can have (enabled or disabled), and parameters of an enabled rule, including every parameter of a rule written as `true`.
+`plan`, `apply`, and `drift` list them in a warning (`undeclared` with `--json`), naming a table as a whole when none of its keys is written.
 List the ones to leave unchanged on purpose in `meta.unmanaged`, as key paths; a table covers every key in it.
 An entry that is not a key path, or covers no unwritten setting, is an error.
 `--strict` turns each remaining unwritten setting into an error, which catches a setting a newer ghrs adds before it goes unmanaged without notice.
-`import` writes every setting GitHub returns.
+`import` writes every setting GitHub returns, and writes each rule the ruleset can have but does not enable as `false`.
 
 Actors are written by name (App slug, team slug, user login, role name), and ghrs resolves them to IDs.
 When running as a GitHub App, `integration = "self"` refers to that App.

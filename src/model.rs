@@ -266,7 +266,7 @@ pub struct Ruleset {
     /// removes every bypass actor
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bypass_actors: Vec<BypassActor>,
-    /// Rules not written are disabled
+    /// Rules not written keep their current state; `false` disables a rule
     #[serde(default)]
     pub rules: Rules,
 }
@@ -316,10 +316,11 @@ fn default_bypass_mode() -> String {
 }
 
 optional_table! {
-    /// Rules of a ruleset. Rules not written here are disabled.
+    /// Rules of a ruleset. Rules not written here keep their current state; `false` disables a
+    /// rule.
     ///
     /// Rules GitHub has but this table lacks cannot be declared. plan keeps them at their current
-    /// values instead of disabling them, so a rule GitHub adds later is not deleted.
+    /// values as well, so a rule GitHub adds later is not deleted.
     //
     // Fields are named by the API's rule type, so `KEYS` lists rule types. The renames follow
     // `schema::RULE_NAMES`.
@@ -371,6 +372,19 @@ impl Rules {
             Ok(serde_json::Value::Object(map)) => map,
             _ => serde_json::Map::new(),
         }
+    }
+
+    /// The rules a ruleset with `target` can have, by rule type. Rules for the other target, and
+    /// on a personal repository those for Organizations only, are left out.
+    pub fn applicable(target: &str, owned_by_org: bool) -> impl Iterator<Item = &'static str> {
+        let other_target = match target {
+            "branch" => schema::TAG_ONLY_RULES,
+            "tag" => schema::BRANCH_ONLY_RULES,
+            _ => &[],
+        };
+        Self::KEYS.iter().copied().filter(move |rule| {
+            !other_target.contains(rule) && (owned_by_org || !schema::ORG_ONLY_RULES.contains(rule))
+        })
     }
 
     /// Parameter keys ghrs knows for a rule. `None` for rules without parameters and for
@@ -902,6 +916,17 @@ mod tests {
     use super::*;
     use crate::schema::PARAMETERIZED_RULES;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn applicable_rules_follow_target_and_owner() {
+        let branch: Vec<_> = Rules::applicable("branch", false).collect();
+        assert!(branch.contains(&"copilot_code_review"));
+        assert!(!branch.contains(&"tag_name_pattern"));
+        assert!(!branch.contains(&"merge_queue"));
+        let tag: Vec<_> = Rules::applicable("tag", true).collect();
+        assert!(tag.contains(&"tag_name_pattern"));
+        assert!(!tag.contains(&"pull_request"));
+    }
 
     /// The keys import keeps in nested tables are the ones the types serialize
     #[test]

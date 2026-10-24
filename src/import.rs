@@ -368,7 +368,8 @@ impl Importer {
 
     /// Fold the rule array into a table.
     ///
-    /// Rules without parameters become booleans; rules with parameters become tables.
+    /// Rules without parameters become booleans; rules with parameters become tables. Rules
+    /// the ruleset can have but GitHub does not return are disabled, and written as `false`.
     ///
     /// Rules and parameters [`Rules`] does not know are left out with a warning. plan keeps them
     /// at their current values, so leaving them out does not change them.
@@ -400,6 +401,9 @@ impl Importer {
                 (_, Some(params)) => self.plain_params(ruleset, &rule_type, target, params)?,
             };
             out.insert(rule_to_toml(&rule_type).to_string(), value);
+        }
+        for rule in Rules::applicable(target, self.org.is_some()) {
+            out.entry(rule_to_toml(rule)).or_insert(Json::Bool(false));
         }
         serde_json::from_value(Json::Object(out))
             .with_context(|| format!("ruleset \"{ruleset}\": cannot read the rules"))

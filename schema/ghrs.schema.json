@@ -609,7 +609,7 @@
     },
     "Rules": {
       "additionalProperties": false,
-      "description": "Rules of a ruleset. Rules not written here are disabled.\n\nRules GitHub has but this table lacks cannot be declared. plan keeps them at their current\nvalues instead of disabling them, so a rule GitHub adds later is not deleted.",
+      "description": "Rules of a ruleset. Rules not written here keep their current state; `false` disables a\nrule.\n\nRules GitHub has but this table lacks cannot be declared. plan keeps them at their current\nvalues as well, so a rule GitHub adds later is not deleted.",
       "properties": {
         "block_force_pushes": {
           "description": "Only bypass actors can force push to matching refs",
@@ -859,7 +859,7 @@
         "rules": {
           "$ref": "#/$defs/Rules",
           "default": {},
-          "description": "Rules not written are disabled"
+          "description": "Rules not written keep their current state; `false` disables a rule"
         },
         "target": {
           "description": "Push rulesets are Team / Enterprise only",

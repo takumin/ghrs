@@ -30,7 +30,8 @@ pub struct Plan {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ignored: Vec<String>,
     /// Settings ghrs knows but the file leaves unwritten and meta.unmanaged does not list, kept
-    /// at their current values (key paths such as `repository.homepage`)
+    /// at their current values (key paths such as `repository.homepage`). Also reported in
+    /// `warnings`
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub undeclared: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -203,6 +204,13 @@ pub async fn run(
     errors.extend(unused);
     if strict {
         errors.extend(undeclared::strict(&undeclared));
+    } else if !undeclared.is_empty() {
+        warnings.push(format!(
+            "{} unwritten setting(s) ({}) left unchanged; write them, or list them in \
+            meta.unmanaged",
+            undeclared.len(),
+            undeclared.join(", ")
+        ));
     }
     if !errors.is_empty() {
         return Err(Diagnostics::new(errors).into());
