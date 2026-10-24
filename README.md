@@ -148,7 +148,7 @@ Actors are written by name (App slug, team slug, user login, role name), and ghr
 When running as a GitHub App, `integration = "self"` refers to that App.
 
 Rule parameters not written in a rule's table keep their current values.
-Rules and parameters that ghrs does not know yet (for example, ones GitHub added recently) cannot be declared; `import` leaves them out with a warning, and `plan` keeps them at their current values instead of removing them.
+Rules, parameters, and bypass actor types that ghrs does not know yet (for example, ones GitHub added recently) cannot be declared; `import` leaves them out with a warning, and `plan` keeps them at their current values instead of removing them.
 The exception is a parameter inside an element of an array (for example, an entry of `required_reviewers`): the element is sent as a whole, so `plan` shows its removal.
 
 Unknown keys are rejected, including rule names and rule parameters, so a misspelled key fails instead of being silently ignored.

@@ -16,6 +16,7 @@ use crate::github::GitHub;
 use crate::model::{Config, Rules};
 use crate::repo::RepoRef;
 use crate::resolve::{self, Directory};
+use crate::schema::actor_type_to_toml;
 use crate::state::{self, RulesetState};
 use crate::validate;
 
@@ -334,6 +335,15 @@ async fn current_rulesets(
                 "ruleset \"{}\": keeping unsupported condition \"{key}\" at its current value",
                 state.name
             ));
+        }
+        for actor in &state.actors {
+            if actor_type_to_toml(&actor.actor_type).is_none() {
+                warnings.push(format!(
+                    "ruleset \"{}\": keeping unsupported bypass actor type \"{}\" at its current \
+                    value",
+                    state.name, actor.actor_type
+                ));
+            }
         }
         for rule in state.rules.keys() {
             if !Rules::KEYS.contains(&rule.as_str()) {

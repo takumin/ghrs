@@ -1,6 +1,6 @@
 //! Read the current state from the GitHub API and convert it into the `.ghrs.toml` model.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::{Map, Value as Json};
 use std::collections::HashMap;
 
@@ -188,7 +188,7 @@ impl Importer {
         let mut bypass_actors = Vec::new();
         if let Some(actors) = v["bypass_actors"].as_array() {
             for actor in actors.clone() {
-                bypass_actors.push(self.bypass_actor(&name, &actor).await?);
+                bypass_actors.extend(self.bypass_actor(&name, &actor).await?);
             }
         }
 
@@ -207,7 +207,8 @@ impl Importer {
         })
     }
 
-    async fn bypass_actor(&mut self, ruleset: &str, v: &Json) -> Result<BypassActor> {
+    /// A kind ghrs does not know cannot be declared, so it is left out with a warning.
+    async fn bypass_actor(&mut self, ruleset: &str, v: &Json) -> Result<Option<BypassActor>> {
         let actor_type = string_or_empty(&v["actor_type"]);
         let actor_id = v["actor_id"].as_u64();
         let mode = string_or_empty(&v["bypass_mode"]);
@@ -253,14 +254,20 @@ impl Importer {
             }
             // A deploy key refers to the whole kind, and actor_id is null (observed)
             "DeployKey" => ("deploy_key", None),
-            other => bail!("ruleset \"{ruleset}\": unknown actor_type \"{other}\""),
+            other => {
+                self.warn(format!(
+                    "ruleset \"{ruleset}\": bypass actor type \"{other}\" is not supported; left \
+                    it out of the declaration, and plan keeps it as is"
+                ));
+                return Ok(None);
+            }
         };
 
-        Ok(BypassActor {
+        Ok(Some(BypassActor {
             actor_type: toml_type.to_string(),
             name,
             mode,
-        })
+        }))
     }
 
     /// Only an Organization owner can list installations, so on failure the ID is left numeric.
