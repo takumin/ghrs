@@ -40,6 +40,7 @@ pub fn drift_json(plan: &Plan) -> Json {
         "repository": plan.repository,
         "drift": !resources.is_empty(),
         "resources": resources,
+        "warnings": plan.warnings,
     })
 }
 
