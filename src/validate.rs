@@ -467,7 +467,8 @@ pub fn check_context(
     if scope.rulesets && visibility == "private" && !config.rulesets.is_empty() {
         let mut d = Diagnostic::error(
             Code::RulesetsOnPrivate,
-            "rulesets are not available on private repositories (free plan limitation)",
+            "rulesets are not available on private repositories on the GitHub Free plan, which \
+            ghrs assumes",
         )
         .help("set repository.visibility to \"public\" or remove the rulesets");
         if declared_visibility.is_some() {

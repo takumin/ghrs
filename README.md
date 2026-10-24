@@ -161,6 +161,9 @@ With `--json`, these errors are written to standard output as structured diagnos
 
 Rulesets inherited from the organization are not managed.
 
+ghrs assumes the GitHub Free plan.
+It rejects what needs a paid plan: rulesets on a private repository, `enforcement = "evaluate"`, `target = "push"`, and `visibility = "internal"`.
+
 ## Authentication
 
 Reading bypass actors and changing settings both require admin permission on the repository.
