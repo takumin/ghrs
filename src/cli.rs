@@ -1,5 +1,5 @@
 use clap::builder::PossibleValuesParser;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum, ValueHint};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
@@ -140,7 +140,7 @@ pub struct ImportArgs {
 
     /// JSON Schema (path or URL) the `#:schema` comment of the output references (default: the
     /// schema of this version on GitHub)
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
     pub schema: Option<String>,
 
     /// Write the output without the comment header that references the JSON Schema
