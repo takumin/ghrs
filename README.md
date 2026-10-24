@@ -46,7 +46,7 @@ ghrs apply
 ```
 
 The target repository is taken from `--repo OWNER/NAME`, then from `[meta]` in the declaration file, then from the git remote of the current directory.
-`import` reads no declaration file, so it skips `[meta]`.
+`import` reads no declaration file, so it skips `[meta]`, and it does not write `[meta]` either.
 
 ## Commands
 
