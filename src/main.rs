@@ -102,7 +102,7 @@ async fn import(args: ImportArgs, auth: &AuthArgs) -> Result<ExitCode> {
     for warning in &importer.warnings {
         note(&format!("warning: {warning}\n"));
     }
-    note(&format!("API calls: {}\n", importer.gh.calls));
+    note_calls(&importer.gh).await;
 
     Ok(ExitCode::SUCCESS)
 }
@@ -114,29 +114,34 @@ async fn plan(args: PlanArgs, auth: &AuthArgs) -> Result<ExitCode> {
         out(&format!("{}\n", serde_json::to_string_pretty(&plan)?))?;
     } else {
         out(&render::text(&plan, args.verbose))?;
-        print_writes(&gh, &plan).await?;
+        print_writes(&plan)?;
         for warning in &plan.warnings {
             note(&format!("warning: {warning}\n"));
         }
     }
-    note(&format!("API calls: {}\n", gh.calls));
+    note_calls(&gh).await;
 
     Ok(ExitCode::SUCCESS)
 }
 
-/// Number of writes required by apply and the remaining rate limit. The remaining
-/// count changes constantly, so it is not included in `--json` (determinism requirement).
-async fn print_writes(gh: &GitHub, plan: &plan::Plan) -> Result<()> {
+/// Number of writes required by apply.
+fn print_writes(plan: &plan::Plan) -> Result<()> {
     if plan.writes == 0 {
         return Ok(());
     }
-    out(&match gh.rate_limit().await {
+    out(&format!("writes needed for apply: {}\n", plan.writes))
+}
+
+/// Number of API calls made, with the rate limit left afterwards. The remaining count changes
+/// constantly, so it goes to stderr and never into `--json` (determinism requirement).
+async fn note_calls(gh: &GitHub) {
+    note(&match gh.rate_limit().await {
         Ok((remaining, limit)) => format!(
-            "writes needed for apply: {} (rate limit remaining: {remaining} / {limit})\n",
-            plan.writes
+            "API calls: {} (rate limit: {remaining} / {limit} remaining)\n",
+            gh.calls
         ),
-        Err(_) => format!("writes needed for apply: {}\n", plan.writes),
-    })
+        Err(_) => format!("API calls: {}\n", gh.calls),
+    });
 }
 
 /// Write to `path`, or to stdout without one.
@@ -181,7 +186,7 @@ async fn apply(args: ApplyArgs, auth: &AuthArgs) -> Result<ExitCode> {
         note(&render::text(&plan, p.verbose));
     } else {
         out(&render::text(&plan, p.verbose))?;
-        print_writes(&gh, &plan).await?;
+        print_writes(&plan)?;
     }
     for warning in &plan.warnings {
         note(&format!("warning: {warning}\n"));
@@ -218,7 +223,7 @@ async fn apply(args: ApplyArgs, auth: &AuthArgs) -> Result<ExitCode> {
     } else if !plan.steps.is_empty() {
         out(&render::apply_text(&report))?;
     }
-    note(&format!("API calls: {}\n", gh.calls));
+    note_calls(&gh).await;
 
     Ok(if failed == 0 {
         ExitCode::SUCCESS
@@ -242,7 +247,7 @@ async fn drift(args: DriftArgs, auth: &AuthArgs) -> Result<ExitCode> {
             note(&format!("warning: {warning}\n"));
         }
     }
-    note(&format!("API calls: {}\n", gh.calls));
+    note_calls(&gh).await;
 
     Ok(if drifted && args.exit_code {
         ExitCode::from(2)
