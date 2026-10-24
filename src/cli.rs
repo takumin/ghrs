@@ -52,7 +52,7 @@ pub enum Command {
     Import(ImportArgs),
     /// Report only whether there is any difference
     Drift(DriftArgs),
-    /// Write the JSON Schema of the declaration file: each key's meaning, type, and allowed values
+    /// Write the JSON Schema: key meanings, types, and allowed values
     Schema(SchemaArgs),
     /// Write a shell completion script to standard output
     Completion(CompletionArgs),

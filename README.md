@@ -56,7 +56,7 @@ The target repository is taken from `--repo OWNER/NAME`, then from `[meta]` in t
 | `ghrs apply` | Apply the difference to GitHub |
 | `ghrs import` | Export the current settings in `.ghrs.toml` format |
 | `ghrs drift` | Report only whether there is any difference |
-| `ghrs schema` | Write the JSON Schema of the declaration file: each key's meaning, type, and allowed values |
+| `ghrs schema` | Write the JSON Schema: key meanings, types, and allowed values |
 | `ghrs completion <SHELL>` | Write a shell completion script to standard output |
 
 Common options for `plan` and `apply`:
@@ -81,17 +81,14 @@ Like `plan` without `--prune`, `drift` does not count undeclared rulesets, colla
 ## JSON Schema
 
 `ghrs schema` writes the JSON Schema of the declaration file, which editors and coding agents can use to find the allowed keys and values.
-The same schema is committed as [`schema/ghrs.schema.json`](schema/ghrs.schema.json).
-
-`import` starts its output with a header that references the schema in the form [taplo](https://taplo.tamasfe.dev/) reads.
-It points at the schema committed at the tag of the running version, and tells readers to take key meanings from the schema, not from the key names.
+It is also committed as [`schema/ghrs.schema.json`](schema/ghrs.schema.json), which `import` references for its own version in the form [taplo](https://taplo.tamasfe.dev/) reads:
 
 ```toml
 #:schema https://raw.githubusercontent.com/takumin/ghrs/v<VERSION>/schema/ghrs.schema.json
 # Take key meanings from the schema, not from key names or the GitHub API.
 ```
 
-`--schema PATH` references another path or URL instead, and `--no-schema` leaves the header out.
+`--schema PATH` changes the reference, and `--no-schema` drops these lines.
 
 ```sh
 ghrs schema --out ghrs.schema.json
@@ -214,11 +211,8 @@ aqua install
 task          # format, schema, lint, dependency policy check, test, doc, build
 task audit    # the policy check and the RustSec advisory scan
 task test
-task schema   # regenerate schema/ghrs.schema.json
+task schema   # regenerate schema/ghrs.schema.json (CI does this on pull requests)
 ```
-
-`schema/ghrs.schema.json` must match the code, since `import` references it at each release tag.
-CI regenerates it on pull requests and commits the difference.
 
 ## License
 
