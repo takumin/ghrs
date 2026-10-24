@@ -47,10 +47,19 @@ include = ["~DEFAULT_BRANCH"]
 exclude = []
 
 [ruleset.main.rules]
+restrict_creations = false
+restrict_updates = false
 restrict_deletions = true
+required_linear_history = false
+required_deployments = false
 required_signatures = true
 block_force_pushes = true
+workflows = false
+code_scanning = false
+code_quality = false
+code_coverage = false
 copilot_code_review = false
+license_compliance_scanning = false
 
 [ruleset.main.rules.pull_request]
 allowed_merge_methods = ["merge", "squash"]
@@ -79,8 +88,14 @@ exclude = []
 [ruleset.tags.rules]
 restrict_creations = true
 restrict_deletions = true
+required_linear_history = false
+required_deployments = false
 required_signatures = true
 block_force_pushes = true
+workflows = false
+code_quality = false
+code_coverage = false
+license_compliance_scanning = false
 
 [ruleset.tags.rules.restrict_updates]
 update_allows_fetch_and_merge = false
