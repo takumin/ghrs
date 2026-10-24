@@ -81,8 +81,17 @@ Like `plan` without `--prune`, `drift` does not count undeclared rulesets, colla
 ## JSON Schema
 
 `ghrs schema` writes the JSON Schema of the declaration file, which editors and coding agents can use to find the allowed keys and values.
-`import --schema` references it from the first line of the output in the form [taplo](https://taplo.tamasfe.dev/) reads.
 The same schema is committed as [`schema/ghrs.schema.json`](schema/ghrs.schema.json).
+
+`import` starts its output with a header that references the schema in the form [taplo](https://taplo.tamasfe.dev/) reads.
+It points at the schema committed at the tag of the running version, and tells readers to take key meanings from the schema, not from the key names.
+
+```toml
+#:schema https://raw.githubusercontent.com/takumin/ghrs/v<VERSION>/schema/ghrs.schema.json
+# Take key meanings from the schema, not from key names or the GitHub API.
+```
+
+`--schema PATH` references another path or URL instead, and `--no-schema` leaves the header out.
 
 ```sh
 ghrs schema --out ghrs.schema.json

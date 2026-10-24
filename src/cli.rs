@@ -125,9 +125,14 @@ pub struct ImportArgs {
     #[arg(long, value_name = "PATH")]
     pub out: Option<PathBuf>,
 
-    /// Reference this JSON Schema (path or URL) from the output with a `#:schema` comment
+    /// JSON Schema (path or URL) the `#:schema` comment of the output references (default: the
+    /// schema of this version on GitHub)
     #[arg(long, value_name = "PATH")]
     pub schema: Option<String>,
+
+    /// Write the output without the comment header that references the JSON Schema
+    #[arg(long, conflicts_with = "schema")]
+    pub no_schema: bool,
 }
 
 #[derive(Args)]

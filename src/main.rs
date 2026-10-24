@@ -93,9 +93,8 @@ async fn import(args: ImportArgs, auth: &AuthArgs) -> Result<ExitCode> {
     let mut importer = import::Importer::new(gh, self_app.as_ref());
     let config = importer.run(&target.owner, &target.name).await?;
     let mut output = import::render(&config)?;
-    if let Some(schema) = &args.schema {
-        // taplo reads the schema from this directive on the first line
-        output = format!("#:schema {schema}\n\n{output}");
+    if !args.no_schema {
+        output = format!("{}\n{output}", schema_header(args.schema.as_deref()));
     }
     write_output(args.out.as_deref(), &output)?;
 
@@ -105,6 +104,21 @@ async fn import(args: ImportArgs, auth: &AuthArgs) -> Result<ExitCode> {
     note_calls(&importer.gh).await;
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// Schema committed in this repository at the tag of this version
+const SCHEMA_URL: &str = concat!(
+    "https://raw.githubusercontent.com/takumin/ghrs/v",
+    env!("CARGO_PKG_VERSION"),
+    "/schema/ghrs.schema.json"
+);
+
+/// Comment header of the import output. taplo reads the schema from the directive on the first
+/// line, and the second line keeps readers (coding agents above all) from guessing key meanings
+/// from GitHub's API.
+fn schema_header(schema: Option<&str>) -> String {
+    const NOTE: &str = "# Take key meanings from the schema, not from key names or the GitHub API.";
+    format!("#:schema {}\n{NOTE}\n", schema.unwrap_or(SCHEMA_URL))
 }
 
 async fn plan(args: PlanArgs, auth: &AuthArgs) -> Result<ExitCode> {
@@ -349,5 +363,26 @@ fn resolve_target(flag: Option<RepoRef>, config: &Config) -> Result<RepoRef> {
         }),
         (None, None) => repo::resolve(None),
         _ => bail!("[meta] needs both owner and repo, or neither"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_header_references_the_schema_of_this_version() {
+        let header = schema_header(None);
+        let mut lines = header.lines();
+        let url = format!(
+            "https://raw.githubusercontent.com/takumin/ghrs/v{}/schema/ghrs.schema.json",
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(lines.next(), Some(format!("#:schema {url}").as_str()));
+        assert!(lines.all(|line| line.starts_with("# ")));
+        assert!(header.ends_with('\n'));
+        assert!(
+            schema_header(Some("./ghrs.schema.json")).starts_with("#:schema ./ghrs.schema.json\n")
+        );
     }
 }
