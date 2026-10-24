@@ -93,6 +93,11 @@ Each diagnostic gives the line and column where its key is written, or, for an u
 With `--json`, it writes an array with the file, its diagnostics, and the checks it skipped, for each file.
 `--format github` writes them as GitHub Actions workflow commands instead, which annotate the lines in pull requests.
 
+`--fix` applies the suggested fixes marked `machine-applicable`, which keep the meaning of the declaration, writes the file, and reports what is left.
+`--unsafe-fixes` with it also applies the ones marked `maybe-incorrect`, such as the closest key to a misspelled one; review the result before committing it.
+Comments and formatting are kept, though a comment on an element that is removed may stay behind.
+Like `plan`, validation stops at the first error in parsing the file, so the fixes for the rest show up once that error is fixed.
+
 ## JSON Schema
 
 `ghrs schema` writes the JSON Schema of the declaration file, which editors and coding agents can use to find the allowed keys and values.

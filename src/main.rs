@@ -318,7 +318,20 @@ fn lint(args: LintArgs) -> Result<ExitCode> {
     };
     let mut reports = Vec::new();
     for path in &args.paths {
-        let text = read_config(path)?;
+        let mut text = read_config(path)?;
+        if args.fix {
+            let (fixed, applied) = lint::fix(&text, &context, args.unsafe_fixes);
+            if applied > 0 {
+                std::fs::write(path, &fixed)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+                let plural = if applied == 1 { "" } else { "es" };
+                note(&format!(
+                    "{}: applied {applied} fix{plural}\n",
+                    path.display()
+                ));
+                text = fixed;
+            }
+        }
         let mut report = lint::run(&text, &context);
         report.diagnostics.file = Some(path.clone());
         reports.push(report);

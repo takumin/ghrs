@@ -207,6 +207,14 @@ pub struct LintArgs {
     #[arg(long)]
     pub strict: bool,
 
+    /// Apply the suggested fixes that keep the meaning of the declaration, and write the file
+    #[arg(long)]
+    pub fix: bool,
+
+    /// With --fix, also apply the suggested fixes that may not match the intent
+    #[arg(long, requires = "fix")]
+    pub unsafe_fixes: bool,
+
     /// Output format
     #[arg(
         long,

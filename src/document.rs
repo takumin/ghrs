@@ -1,9 +1,11 @@
 //! Key paths of diagnostics (`ruleset."release/*".bypass_actors[1]`) resolved against the text of
-//! the declaration file: where they are written.
+//! the declaration file: where they are written, and suggested fixes applied to them.
 
-use toml_edit::{Item, TableLike, Value};
+use anyhow::{Context, Result, bail};
+use serde_json::Value as Json;
+use toml_edit::{DocumentMut, Item, TableLike, Value};
 
-use crate::diagnostic::{Diagnostic, Location};
+use crate::diagnostic::{Diagnostic, Edit, Location};
 
 #[derive(Debug, PartialEq)]
 enum Segment {
@@ -141,9 +143,138 @@ pub fn locate(diagnostics: &mut [Diagnostic], text: &str) {
     }
 }
 
+/// `text` with `edit` applied, keeping its comments and formatting.
+pub fn apply(text: &str, edit: &Edit) -> Result<String> {
+    match edit {
+        // Done on the text, since toml_edit keeps the formatting of a key only when it keeps the
+        // key itself, and moves a key it inserts to the end of its table
+        Edit::Rename { path, to } => {
+            let doc = toml_edit::Document::parse(text)?;
+            let key = match (segments(path).as_deref(), resolve(&doc, path)) {
+                (Some([.., Segment::Key(_)]), (Some(span), true)) => span,
+                _ => bail!("{path} is not a written key"),
+            };
+            let to = toml_edit::Key::new(to.as_str()).display_repr().into_owned();
+            Ok(format!("{}{to}{}", &text[..key.start], &text[key.end..]))
+        }
+        Edit::Remove { path } => edit_parent(text, path, |parent, last| match (parent, last) {
+            (Parent::Table(table), Segment::Key(key)) => table.remove(key).map(drop),
+            (Parent::Array(array), Segment::Index(i)) if *i < array.len() => {
+                array.remove(*i);
+                Some(())
+            }
+            (Parent::Tables(tables), Segment::Index(i)) if *i < tables.len() => {
+                tables.remove(*i);
+                Some(())
+            }
+            _ => None,
+        }),
+        Edit::Set { path, value } => {
+            let new = to_value(value).with_context(|| format!("cannot write {value} in TOML"))?;
+            edit_parent(text, path, |parent, last| {
+                let old = match (parent, last) {
+                    (Parent::Table(table), Segment::Key(key)) => match table.get_mut(key) {
+                        Some(item) => item.as_value_mut()?,
+                        None => {
+                            table.insert(key, Item::Value(new.clone()));
+                            return Some(());
+                        }
+                    },
+                    (Parent::Array(array), Segment::Index(i)) => array.get_mut(*i)?,
+                    _ => return None,
+                };
+                let decor = old.decor().clone();
+                *old = new.clone();
+                *old.decor_mut() = decor;
+                Some(())
+            })
+        }
+    }
+}
+
+enum Parent<'a> {
+    Table(&'a mut dyn TableLike),
+    Array(&'a mut toml_edit::Array),
+    Tables(&'a mut toml_edit::ArrayOfTables),
+    Leaf,
+}
+
+impl<'a> Parent<'a> {
+    fn of_item(item: &'a mut Item) -> Self {
+        match item {
+            Item::Table(table) => Parent::Table(table),
+            Item::ArrayOfTables(tables) => Parent::Tables(tables),
+            Item::Value(value) => Parent::of_value(value),
+            Item::None => Parent::Leaf,
+        }
+    }
+
+    fn of_value(value: &'a mut Value) -> Self {
+        match value {
+            Value::InlineTable(table) => Parent::Table(table),
+            Value::Array(array) => Parent::Array(array),
+            _ => Parent::Leaf,
+        }
+    }
+
+    fn step(self, segment: &Segment) -> Option<Self> {
+        match (self, segment) {
+            (Parent::Table(table), Segment::Key(key)) => table.get_mut(key).map(Parent::of_item),
+            (Parent::Array(array), Segment::Index(i)) => array.get_mut(*i).map(Parent::of_value),
+            (Parent::Tables(tables), Segment::Index(i)) => {
+                tables.get_mut(*i).map(|table| Parent::Table(table))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Apply `f` to the table or array holding the last segment of `path`, and render the document.
+/// `f` returns `None` when the segment does not fit there.
+fn edit_parent(
+    text: &str,
+    path: &str,
+    f: impl FnOnce(Parent<'_>, &Segment) -> Option<()>,
+) -> Result<String> {
+    let mut doc: DocumentMut = text.parse()?;
+    let segments = segments(path).with_context(|| format!("{path} is not a key path"))?;
+    let Some((last, init)) = segments.split_last() else {
+        bail!("{path} is not a key path");
+    };
+    let mut parent = Parent::Table(doc.as_table_mut());
+    for segment in init {
+        parent = parent
+            .step(segment)
+            .with_context(|| format!("{path} is not written"))?;
+    }
+    f(parent, last).with_context(|| format!("{path} is not written"))?;
+    Ok(doc.to_string())
+}
+
+fn to_value(json: &Json) -> Option<Value> {
+    Some(match json {
+        Json::Bool(b) => Value::from(*b),
+        Json::Number(n) => match n.as_i64() {
+            Some(i) => Value::from(i),
+            None => Value::from(n.as_f64()?),
+        },
+        Json::String(s) => Value::from(s.as_str()),
+        Json::Array(values) => Value::Array(values.iter().map(to_value).collect::<Option<_>>()?),
+        Json::Object(map) => {
+            let mut table = toml_edit::InlineTable::new();
+            for (key, value) in map {
+                table.insert(key, to_value(value)?);
+            }
+            Value::InlineTable(table)
+        }
+        Json::Null => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn key(k: &str) -> Segment {
         Segment::Key(k.to_string())
@@ -191,5 +322,84 @@ mod tests {
             location("a\nあい = 1", "a\nあい".len()),
             Location { line: 2, column: 3 }
         );
+    }
+
+    #[test]
+    fn removes_keeping_the_rest_of_the_file() {
+        let text = "# keep\n[ruleset.main]\nbypass_actors = [\n  { type = \"a\" }, # first\n  \
+            { type = \"b\" },\n]\n";
+        let fixed = apply(
+            text,
+            &Edit::Remove {
+                path: "ruleset.main.bypass_actors[0]".into(),
+            },
+        )
+        .unwrap();
+        assert!(fixed.starts_with("# keep\n[ruleset.main]\n"), "{fixed}");
+        assert!(!fixed.contains("\"a\""), "{fixed}");
+        assert!(fixed.contains("{ type = \"b\" }"), "{fixed}");
+
+        let text = "[[ruleset.main.bypass_actors]]\ntype = \"a\"\n\n\
+            [[ruleset.main.bypass_actors]]\ntype = \"b\"\n";
+        let fixed = apply(
+            text,
+            &Edit::Remove {
+                path: "ruleset.main.bypass_actors[1]".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(fixed, "[[ruleset.main.bypass_actors]]\ntype = \"a\"\n");
+
+        let text = "[collaborator.octocat]\npermission = \"admin\" # why\n";
+        let fixed = apply(
+            text,
+            &Edit::Set {
+                path: "collaborator.octocat.permission".into(),
+                value: json!("push"),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fixed,
+            "[collaborator.octocat]\npermission = \"push\" # why\n"
+        );
+        assert!(
+            apply(
+                text,
+                &Edit::Remove {
+                    path: "collaborator.hubot".into()
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn renames_in_place() {
+        let text = "[ruleset.main.rules]\ndeletion = true # keep\nblock_force_pushes = true\n\n\
+            [ruleset.main.rules.update]\nupdate_allows_fetch_and_merge = false\n";
+        let rename = |path: &str, to: &str| Edit::Rename {
+            path: path.into(),
+            to: to.into(),
+        };
+        let fixed = apply(
+            text,
+            &rename("ruleset.main.rules.deletion", "restrict_deletions"),
+        )
+        .unwrap();
+        assert!(
+            fixed.starts_with("[ruleset.main.rules]\nrestrict_deletions = true # keep\nblock"),
+            "{fixed}"
+        );
+        let fixed = apply(
+            &fixed,
+            &rename("ruleset.main.rules.update", "restrict_updates"),
+        )
+        .unwrap();
+        assert!(
+            fixed.contains("[ruleset.main.rules.restrict_updates]\n"),
+            "{fixed}"
+        );
+        assert!(apply(text, &rename("ruleset.main.rules.missing", "x")).is_err());
     }
 }

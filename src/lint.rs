@@ -4,9 +4,12 @@
 
 use serde::Serialize;
 
-use crate::diagnostic::{Diagnostics, Severity};
+use crate::diagnostic::{Applicability, Diagnostics, Severity};
 use crate::plan::Scope;
 use crate::{document, undeclared, validate};
+
+/// Rounds of `fix` before it gives up, in case fixes undo each other
+const MAX_FIXES: usize = 100;
 
 /// What plan would read from the repository on GitHub. `None` is not known.
 pub struct Context {
@@ -38,6 +41,37 @@ pub fn run(text: &str, context: &Context) -> Report {
     let mut report = check(text, context);
     document::locate(&mut report.diagnostics.diagnostics, text);
     report
+}
+
+/// `text` with the suggested fixes `run` finds applied, and how many were. Only the fixes that
+/// keep the meaning of the declaration are applied, unless `unsafe_fixes`.
+pub fn fix(text: &str, context: &Context, unsafe_fixes: bool) -> (String, usize) {
+    let mut text = text.to_string();
+    let mut applied = 0;
+    // One fix per round, since a fix can move what the others point at (removing
+    // bypass_actors[0] makes bypass_actors[1] the first)
+    for _ in 0..MAX_FIXES {
+        let report = check(&text, context);
+        let fixed = report
+            .diagnostics
+            .diagnostics
+            .iter()
+            .filter_map(|d| d.fix.as_ref())
+            .filter(|fix| unsafe_fixes || fix.applicability == Applicability::MachineApplicable)
+            .find_map(|fix| {
+                document::apply(&text, &fix.edit)
+                    .ok()
+                    .filter(|t| *t != text)
+            });
+        match fixed {
+            Some(fixed) => {
+                text = fixed;
+                applied += 1;
+            }
+            None => break,
+        }
+    }
+    (text, applied)
 }
 
 /// The reports as GitHub Actions workflow commands, which annotate the lines of the files in pull
@@ -302,6 +336,26 @@ mod tests {
             ..UNKNOWN
         };
         assert!(codes(text, &private).contains(&Code::UnusedUnmanaged));
+    }
+
+    #[test]
+    fn fixes_until_nothing_is_left_to_fix() {
+        let text = "[meta]\nunmanaged = [\"repository.has_wiki\", \"repository.homepage\"]\n\
+            [repository]\nhas_wiki = false\nhomepage = \"\"\n";
+        let (fixed, applied) = fix(text, &UNKNOWN, false);
+        assert_eq!(applied, 2);
+        assert!(fixed.contains("unmanaged = []"), "{fixed}");
+        assert!(!codes(&fixed, &UNKNOWN).contains(&Code::UnusedUnmanaged));
+
+        // Renaming a key the API names differently keeps the meaning; guessing a misspelled one
+        // may not
+        let text = ruleset("[ruleset.r.rules]\ndeletion = true\nblock_force_push = true");
+        let (fixed, applied) = fix(&text, &UNKNOWN, false);
+        assert_eq!(applied, 1, "{fixed}");
+        assert!(fixed.contains("restrict_deletions = true"), "{fixed}");
+        let (fixed, applied) = fix(&text, &UNKNOWN, true);
+        assert_eq!(applied, 2, "{fixed}");
+        assert!(fixed.contains("block_force_pushes = true"), "{fixed}");
     }
 
     #[test]
