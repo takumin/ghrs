@@ -14,7 +14,7 @@ use crate::model::{Rules, Ruleset};
 use crate::resolve::Directory;
 use crate::schema::{
     ACTORS_WITHOUT_ID, PARAMETERIZED_RULES, REQUIRED_PARAMS, actor_type_to_api, actor_type_to_toml,
-    for_each_review_actor, review_actor_type_to_api, role_id, rule_defaults,
+    for_each_review_actor, review_actor_type_to_api, role_id, rule_defaults, rule_to_api,
 };
 use crate::validate;
 
@@ -205,7 +205,8 @@ pub fn desired(
 
     let mut rules = BTreeMap::new();
     let mut missing_params = Vec::new();
-    for (rule, value) in &decl.rules.entries() {
+    for (key, value) in &decl.rules.entries() {
+        let rule = rule_to_api(key);
         // Newly created rules have no current value to inherit, so fill required parameters with
         // their defaults
         let current_params = current
@@ -217,11 +218,9 @@ pub fn desired(
             Json::Bool(false) => continue,
             // A parameterized rule written as a boolean is treated the same as a table that
             // declares no parameters
-            Json::Bool(true) => current_params.or_else(|| {
-                PARAMETERIZED_RULES
-                    .contains(&rule.as_str())
-                    .then(|| json!({}))
-            }),
+            Json::Bool(true) => {
+                current_params.or_else(|| PARAMETERIZED_RULES.contains(&rule).then(|| json!({})))
+            }
             Json::Object(table) => {
                 let mut merged = match current_params {
                     Some(Json::Object(map)) => map,
@@ -230,16 +229,16 @@ pub fn desired(
                 merge_params(&mut merged, declared_params(rule, table, dir, &at)?);
                 Some(Json::Object(merged))
             }
-            _ => bail!("{at}: rules.{rule} must be a boolean or a table"),
+            _ => bail!("{at}: rules.{key} must be a boolean or a table"),
         };
-        if let Some((_, required)) = REQUIRED_PARAMS.iter().find(|(r, _)| r == rule) {
+        if let Some((_, required)) = REQUIRED_PARAMS.iter().find(|(r, _)| *r == rule) {
             let missing: Vec<&str> = required
                 .iter()
                 .filter(|key| params.as_ref().and_then(|p| p.get(**key)).is_none())
                 .copied()
                 .collect();
             if !missing.is_empty() {
-                missing_params.push(missing_params_error(decl, rule, &missing));
+                missing_params.push(missing_params_error(decl, key, &missing));
             }
         }
         // Required by the REST API description inside the table, so REQUIRED_PARAMS cannot hold
@@ -249,11 +248,11 @@ pub fn desired(
         {
             missing_params.push(missing_params_error(
                 decl,
-                &format!("{rule}.dismissal_restriction"),
+                &format!("{key}.dismissal_restriction"),
                 &["enabled"],
             ));
         }
-        rules.insert(rule.clone(), params);
+        rules.insert(rule.to_string(), params);
     }
     if !missing_params.is_empty() {
         return Err(Diagnostics::new(missing_params).into());
@@ -328,7 +327,7 @@ fn normalize(mut rules: BTreeMap<String, Option<Json>>) -> BTreeMap<String, Opti
 }
 
 /// Map a rule's table to API parameters. Only `required_status_checks` is converted, because
-/// the TOML side uses shorter names.
+/// the TOML side uses different names.
 /// Only the user can decide these values, so there is no fix to suggest. Whether one is missing
 /// depends on the current state, so this is found at plan time rather than by `validate::check`.
 fn missing_params_error(decl: &Ruleset, table: &str, missing: &[&str]) -> Diagnostic {
@@ -369,7 +368,7 @@ fn declared_params(
     let mut out = Map::new();
     for (key, value) in table {
         let (key, value) = match (rule, key.as_str()) {
-            ("required_status_checks", "strict") => (
+            ("required_status_checks", "require_up_to_date") => (
                 "strict_required_status_checks_policy".to_string(),
                 value.clone(),
             ),
@@ -533,7 +532,7 @@ mod tests {
     fn undeclared_rules_are_disabled() {
         let cur = current(json!([{ "type": "deletion" }, { "type": "non_fast_forward" }]));
         let want = desired(
-            &decl("[rules]\ndeletion = true\nnon_fast_forward = false"),
+            &decl("[rules]\nrestrict_deletions = true\nblock_force_pushes = false"),
             Some(&cur),
             &Directory::default(),
         )
@@ -712,7 +711,7 @@ mod tests {
             "type": "update", "parameters": { "update_allows_fetch_and_merge": true },
         }]));
         let want = desired(
-            &decl("[rules]\nupdate = true"),
+            &decl("[rules]\nrestrict_updates = true"),
             Some(&cur),
             &Directory::default(),
         )
@@ -722,9 +721,14 @@ mod tests {
 
     #[test]
     fn update_without_fetch_and_merge_has_no_parameters() {
-        let sugar = desired(&decl("[rules]\nupdate = true"), None, &Directory::default()).unwrap();
+        let sugar = desired(
+            &decl("[rules]\nrestrict_updates = true"),
+            None,
+            &Directory::default(),
+        )
+        .unwrap();
         let table = desired(
-            &decl("[rules.update]\nupdate_allows_fetch_and_merge = false"),
+            &decl("[rules.restrict_updates]\nupdate_allows_fetch_and_merge = false"),
             None,
             &Directory::default(),
         )
@@ -735,7 +739,7 @@ mod tests {
         assert_eq!(api.rules["update"], None);
 
         let fetch = desired(
-            &decl("[rules.update]\nupdate_allows_fetch_and_merge = true"),
+            &decl("[rules.restrict_updates]\nupdate_allows_fetch_and_merge = true"),
             None,
             &Directory::default(),
         )
@@ -862,7 +866,7 @@ mod tests {
         let dir = Directory::default().with_app("github-actions", 15368);
         let want = desired(
             &decl(
-                "[rules.required_status_checks]\nstrict = true\n\
+                "[rules.required_status_checks]\nrequire_up_to_date = true\n\
                 checks = [{ context = \"test\" }, { context = \"build\", integration = \
                     \"github-actions\" }]",
             ),

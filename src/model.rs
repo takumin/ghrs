@@ -212,13 +212,22 @@ optional_table! {
     ///
     /// Rules GitHub has but this table lacks cannot be declared. plan keeps them at their current
     /// values instead of disabling them, so a rule GitHub adds later is not deleted.
+    ///
+    /// Fields are named by the API's rule type, so `KEYS` lists rule types. The renames follow
+    /// `schema::RULE_NAMES`.
     #[schemars(
         extend("x-github-source" = rest_api_schema("repository-rule")),
         transform = rule_sources
     )]
     pub struct Rules {
+        /// Only bypass actors can create matching refs
+        #[serde(rename = "restrict_creations")]
         creation: bool,
+        /// Only bypass actors can update matching refs
+        #[serde(rename = "restrict_updates")]
         update: Rule<Update>,
+        /// Only bypass actors can delete matching refs
+        #[serde(rename = "restrict_deletions")]
         deletion: bool,
         required_linear_history: bool,
         merge_queue: Rule<MergeQueue>,
@@ -226,6 +235,8 @@ optional_table! {
         required_signatures: bool,
         pull_request: Rule<PullRequest>,
         required_status_checks: Rule<RequiredStatusChecks>,
+        /// Only bypass actors can force push to matching refs
+        #[serde(rename = "block_force_pushes")]
         non_fast_forward: bool,
         commit_message_pattern: Rule<Pattern>,
         commit_author_email_pattern: Rule<Pattern>,
@@ -274,15 +285,20 @@ impl Rules {
     }
 }
 
-/// Adds to each rule where the REST API description defines it.
+/// Adds to each rule where the REST API description defines it, and the API's name of a rule
+/// ghrs names differently.
 fn rule_sources(schema: &mut Schema) {
     if let Some(Json::Object(rules)) = schema.get_mut("properties") {
         for (rule, property) in rules {
             if let Some(property) = property.as_object_mut() {
+                let api = schema::rule_to_api(rule);
                 property.insert(
                     "x-github-source".to_string(),
-                    schema::rest_api_rule(rule).into(),
+                    schema::rest_api_rule(api).into(),
                 );
+                if api != rule {
+                    property.insert("x-github-api-name".to_string(), api.into());
+                }
             }
         }
     }
@@ -463,11 +479,12 @@ pub struct ReviewActor {
 }
 
 optional_table! {
-    /// Keys are shorter than the API's: `strict` is `strict_required_status_checks_policy`, and
-    /// `checks` is `required_status_checks`.
+    /// Keys differ from the API's: `require_up_to_date` is
+    /// `strict_required_status_checks_policy`, and `checks` is `required_status_checks`.
     pub struct RequiredStatusChecks {
+        /// Branches must be up to date with the base branch before merging
         #[schemars(extend("x-github-api-name" = "strict_required_status_checks_policy"))]
-        strict: bool,
+        require_up_to_date: bool,
         do_not_enforce_on_create: bool,
         #[schemars(extend("x-github-api-name" = "required_status_checks"))]
         checks: Vec<StatusCheck>,
@@ -716,6 +733,7 @@ mod keyed {
 mod tests {
     use super::*;
     use crate::schema::PARAMETERIZED_RULES;
+    use std::collections::BTreeSet;
 
     /// The keys import keeps in nested tables are the ones the types serialize
     #[test]
@@ -852,7 +870,7 @@ mod tests {
         assert_eq!(schema_mismatches(sample), Vec::<String>::new());
 
         let rules = "[ruleset.r]\ntarget = \"branch\"\nenforcement = \"active\"\n\
-            [ruleset.r.rules]\nupdate = true\n[ruleset.r.rules.pull_request]\n\
+            [ruleset.r.rules]\nrestrict_updates = true\n[ruleset.r.rules.pull_request]\n\
             dismissal_restriction = { enabled = true, allowed_actors = [\
                 { type = \"integration\", name = \"self\" }] }\n\
             [ruleset.r.rules.code_coverage]\nminimum_coverage = 80\n";
@@ -871,8 +889,8 @@ mod tests {
                 ".repository.allow_rebase: unknown key",
             ),
             (
-                &ruleset("[ruleset.r.rules]\nnon_fast_foward = true"),
-                ".ruleset.r.rules.non_fast_foward: unknown key",
+                &ruleset("[ruleset.r.rules]\nblock_force_push = true"),
+                ".ruleset.r.rules.block_force_push: unknown key",
             ),
             (
                 &ruleset("[ruleset.r.rules]\npull_request = 1"),
@@ -900,7 +918,7 @@ mod tests {
         for (rule, property) in rules {
             assert_eq!(
                 property["x-github-source"],
-                Json::from(schema::rest_api_rule(rule)),
+                Json::from(schema::rest_api_rule(schema::rule_to_api(rule))),
                 "{rule}"
             );
         }
@@ -914,10 +932,24 @@ mod tests {
         }
     }
 
+    /// The serde renames of [`Rules`] and `schema::RULE_NAMES` agree
+    #[test]
+    fn rules_are_written_by_their_toml_names() {
+        let text: String = Rules::KEYS
+            .iter()
+            .map(|rule| format!("{} = true\n", schema::rule_to_toml(rule)))
+            .collect();
+        let rules: Rules = toml::from_str(&text).unwrap();
+        let entries = rules.entries();
+        let keys: BTreeSet<&str> = entries.keys().map(|k| schema::rule_to_api(k)).collect();
+        assert_eq!(keys, Rules::KEYS.iter().copied().collect());
+    }
+
     #[test]
     fn rules_take_a_boolean_or_a_table() {
         let rules: Rules = toml::from_str(
-            "deletion = true\nupdate = true\n[pull_request]\nrequired_approving_review_count = 1",
+            "restrict_deletions = true\nrestrict_updates = true\n\
+            [pull_request]\nrequired_approving_review_count = 1",
         )
         .unwrap();
         assert!(matches!(rules.update, Some(Rule::Enabled(true))));
@@ -931,7 +963,7 @@ mod tests {
         let text = toml::to_string(&rules).unwrap();
         assert_eq!(
             text,
-            "update = true\ndeletion = true\n\n\
+            "restrict_updates = true\nrestrict_deletions = true\n\n\
             [pull_request]\nrequired_approving_review_count = 1\n"
         );
     }

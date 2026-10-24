@@ -56,11 +56,37 @@ pub fn rule_reference(path: &str) -> Option<String> {
         None if rest.is_empty() => "",
         None => return None,
     };
-    if Rules::KEYS.contains(&rule) || PUSH_RULES.contains(&rule) {
-        Some(rest_api_rule(rule))
+    let api = rule_to_api(rule);
+    let known = Rules::KEYS.contains(&api) && rule_to_toml(api) == rule;
+    if known || PUSH_RULES.contains(&rule) {
+        Some(rest_api_rule(api))
     } else {
         Some(rest_api_schema("repository-rule"))
     }
+}
+
+/// Rules whose API type names only what they restrict, so `deletion = true` could be read as
+/// allowing deletion. The TOML side uses the names the web UI shows. `(API, TOML)`; every other
+/// rule has the same name on both sides.
+pub const RULE_NAMES: &[(&str, &str)] = &[
+    ("creation", "restrict_creations"),
+    ("update", "restrict_updates"),
+    ("deletion", "restrict_deletions"),
+    ("non_fast_forward", "block_force_pushes"),
+];
+
+pub fn rule_to_toml(api: &str) -> &str {
+    RULE_NAMES
+        .iter()
+        .find(|(a, _)| *a == api)
+        .map_or(api, |(_, t)| *t)
+}
+
+pub fn rule_to_api(toml: &str) -> &str {
+    RULE_NAMES
+        .iter()
+        .find(|(_, t)| *t == toml)
+        .map_or(toml, |(a, _)| *a)
 }
 
 /// IDs of built-in repository roles that can be bypass actors.
@@ -353,8 +379,13 @@ mod tests {
             Some(schema("repository-rule-pull-request"))
         );
         assert_eq!(
-            rule_reference(r#"ruleset."release/v1.x".rules.non_fast_forward"#),
+            rule_reference(r#"ruleset."release/v1.x".rules.block_force_pushes"#),
             Some(schema("repository-rule-non-fast-forward"))
+        );
+        // The API's name is not a key of the declaration
+        assert_eq!(
+            rule_reference("ruleset.main.rules.non_fast_forward"),
+            Some(schema("repository-rule"))
         );
         assert_eq!(
             rule_reference(r#"ruleset."a\".rules".rules.max_file_size"#),
@@ -513,7 +544,7 @@ mod tests {
         }
         for (rule, property) in defs["Rules"]["properties"].as_object().unwrap() {
             if let Some(r) = property["anyOf"][1]["$ref"].as_str() {
-                let params = &schemas[rule_schema(rule)]["properties"]["parameters"];
+                let params = &schemas[rule_schema(rule_to_api(rule))]["properties"]["parameters"];
                 pairs.push((r.trim_start_matches("#/$defs/"), params, true));
             }
         }
@@ -577,6 +608,16 @@ mod tests {
             REPOSITORY_ROLES,
             &[(2, "maintain"), (4, "write"), (5, "admin")]
         );
+    }
+
+    #[test]
+    fn rule_names_round_trip() {
+        for (api, toml) in RULE_NAMES {
+            assert_eq!(rule_to_toml(api), *toml);
+            assert_eq!(rule_to_api(toml), *api);
+        }
+        assert_eq!(rule_to_toml("pull_request"), "pull_request");
+        assert_eq!(rule_to_api("pull_request"), "pull_request");
     }
 
     #[test]
