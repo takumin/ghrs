@@ -112,10 +112,8 @@ impl Importer {
         }
 
         Ok(Config {
-            meta: Meta {
-                owner: Some(owner.to_string()),
-                repo: Some(repo.to_string()),
-            },
+            // Left out so that a copied file follows the git remote of its new repository
+            meta: Meta::default(),
             repository,
             rulesets,
             collaborators,
@@ -747,6 +745,7 @@ permission = "push"
         )
         .unwrap();
         let text = render(&config).unwrap();
+        assert!(!text.contains("[meta]"), "{text}");
         assert!(!text.contains("[["), "{text}");
         assert!(
             text.contains(

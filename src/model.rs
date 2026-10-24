@@ -53,7 +53,7 @@ macro_rules! optional_table {
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Meta::is_empty")]
     pub meta: Meta,
     #[serde(default)]
     pub repository: Repository,
@@ -98,6 +98,12 @@ pub struct Meta {
     pub owner: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+}
+
+impl Meta {
+    fn is_empty(&self) -> bool {
+        self.owner.is_none() && self.repo.is_none()
+    }
 }
 
 /// Repository settings, with the names of `PATCH /repos/{owner}/{repo}`. Only the fields that are
