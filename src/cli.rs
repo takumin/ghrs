@@ -1,4 +1,5 @@
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::builder::PossibleValuesParser;
+use clap::{Args, Parser, Subcommand, ValueEnum, ValueHint};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
@@ -139,7 +140,7 @@ pub struct ImportArgs {
 
     /// JSON Schema (path or URL) the `#:schema` comment of the output references (default: the
     /// schema of this version on GitHub)
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
     pub schema: Option<String>,
 
     /// Write the output without the comment header that references the JSON Schema
@@ -208,16 +209,34 @@ pub struct LintArgs {
     pub strict: bool,
 
     /// Lints not to report, by code or group (overrides meta.lint)
-    #[arg(short = 'A', long, value_name = "LINT,...", value_delimiter = ',')]
+    #[arg(
+        short = 'A',
+        long,
+        value_name = "LINT,...",
+        value_delimiter = ',',
+        value_parser = lint_names()
+    )]
     pub allow: Vec<String>,
 
     /// Lints to report as warnings, by code or group (overrides meta.lint)
-    #[arg(short = 'W', long, value_name = "LINT,...", value_delimiter = ',')]
+    #[arg(
+        short = 'W',
+        long,
+        value_name = "LINT,...",
+        value_delimiter = ',',
+        value_parser = lint_names()
+    )]
     pub warn: Vec<String>,
 
     /// Lints to report as errors, by code or group (overrides meta.lint); `warnings` makes every
     /// warning an error
-    #[arg(short = 'D', long, value_name = "LINT,...", value_delimiter = ',')]
+    #[arg(
+        short = 'D',
+        long,
+        value_name = "LINT,...",
+        value_delimiter = ',',
+        value_parser = lint_names()
+    )]
     pub deny: Vec<String>,
 
     /// Apply the suggested fixes that keep the meaning of the declaration, and write the file
@@ -240,6 +259,11 @@ pub struct LintArgs {
     /// Output JSON (same as --format json)
     #[arg(long)]
     pub json: bool,
+}
+
+/// Accepts only lint codes and groups, which also lets shells complete them.
+fn lint_names() -> PossibleValuesParser {
+    PossibleValuesParser::new(crate::lints::names())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]

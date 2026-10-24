@@ -58,7 +58,7 @@ const LINTS: &[Lint] = &[
 /// Names that stand for several lints. `warnings` is every lint at warn when the level is given.
 const GROUPS: &[&str] = &["all", SECURITY, PEDANTIC, "warnings"];
 
-fn names() -> Vec<&'static str> {
+pub fn names() -> Vec<&'static str> {
     GROUPS
         .iter()
         .copied()
@@ -67,7 +67,7 @@ fn names() -> Vec<&'static str> {
 }
 
 /// Whether a level can be given to `name`.
-pub fn is_name(name: &str) -> bool {
+fn is_name(name: &str) -> bool {
     names().contains(&name)
 }
 
