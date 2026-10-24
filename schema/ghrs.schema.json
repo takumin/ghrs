@@ -33,6 +33,21 @@
           "type": "boolean",
           "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/actions-enabled"
         },
+        "fork_pr_contributor_approval": {
+          "description": "Which fork pull requests need a maintainer's approval before their workflows run.\n`all_external_contributors`: those of anyone who is not a collaborator or\nOrganization member. `first_time_contributors`: those of users who have not\ncontributed before. `first_time_contributors_new_to_github`: those of first-time\ncontributors who are also new to GitHub. Public repositories only. Set with\n`PUT /repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval`",
+          "enum": [
+            "all_external_contributors",
+            "first_time_contributors",
+            "first_time_contributors_new_to_github"
+          ],
+          "type": "string",
+          "x-github-api-name": "approval_policy",
+          "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/actions-fork-pr-contributor-approval"
+        },
+        "oidc_subject_claim": {
+          "$ref": "#/$defs/OidcSubjectClaim",
+          "description": "The `sub` claim of the OIDC tokens workflows get. Set with\n`PUT /repos/{owner}/{repo}/actions/oidc/customization/sub`"
+        },
         "selected_actions": {
           "$ref": "#/$defs/SelectedActions",
           "description": "What `allowed_actions = \"selected\"` allows besides the owner's actions, which it\nrequires. Set with `PUT /repos/{owner}/{repo}/actions/permissions/selected-actions`"
@@ -321,6 +336,29 @@
         }
       },
       "type": "object"
+    },
+    "OidcSubjectClaim": {
+      "additionalProperties": false,
+      "description": "The template GitHub makes the `sub` claim from. Keys not written keep their current\nvalues.",
+      "properties": {
+        "include_claim_keys": {
+          "description": "Claims the `sub` claim is made of, in this order, such as `repo` or `context`. Needs\n`use_default = false`",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "use_default": {
+          "description": "Uses the default template instead of `include_claim_keys`",
+          "type": "boolean"
+        },
+        "use_immutable_subject": {
+          "description": "Uses a `sub` claim that names the owner and the repository by ID as well, so that it\ndoes not match a renamed or recreated repository",
+          "type": "boolean"
+        }
+      },
+      "type": "object",
+      "x-github-source": "https://raw.githubusercontent.com/github/rest-api-description/755ee33b4a81d51f6f07a902cce26cbec3b822f2/descriptions/api.github.com/api.github.com.json#/components/schemas/oidc-custom-sub-repo"
     },
     "Pattern": {
       "additionalProperties": false,

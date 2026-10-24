@@ -313,6 +313,14 @@ pub const ALLOWED_ACTIONS: &[&str] = &["local_only", "selected", "all"];
 /// Values of `actions.default_workflow_permissions`, from the narrowest to the widest.
 pub const WORKFLOW_PERMISSIONS: &[&str] = &["read", "write"];
 
+/// Values of `actions.fork_pr_contributor_approval`, from the narrowest to the widest set of
+/// fork pull requests whose workflows run without approval.
+pub const FORK_PR_APPROVAL_POLICIES: &[&str] = &[
+    "all_external_contributors",
+    "first_time_contributors",
+    "first_time_contributors_new_to_github",
+];
+
 /// Maximum number of rulesets per repository. Creating the 76th yields 422 (`The ruleset limit
 /// has been reached.`) (observed, personal repository on the free plan).
 pub const MAX_RULESETS: usize = 75;
@@ -608,8 +616,8 @@ mod tests {
     }
 
     /// Checks `[actions]` against [`REST_API_DESCRIPTION`]: each key exists under the schema it
-    /// names, with the same enumerated values, and together the keys are exactly what the PUT
-    /// endpoints take.
+    /// names, with the same enumerated values, and together the keys of `[actions]` and of
+    /// `[actions.oidc_subject_claim]` are exactly what their PUT endpoints take.
     #[test]
     #[ignore = "downloads the REST API description; run task test:rest-api"]
     fn actions_match_the_rest_api_description() {
@@ -617,31 +625,53 @@ mod tests {
         let schemas = &api["components"]["schemas"];
         let prefix = format!("{REST_API_DESCRIPTION}#/components/schemas/");
         let ours = crate::model::json_schema();
-        let actions = ours["$defs"]["Actions"]["properties"].as_object().unwrap();
-
-        let mut sent = BTreeSet::new();
-        for endpoint in ["", "/workflow"] {
-            let path = format!("/repos/{{owner}}/{{repo}}/actions/permissions{endpoint}");
-            let mut body =
-                &api["paths"][&path]["put"]["requestBody"]["content"]["application/json"]["schema"];
-            if let Some(r) = body["$ref"].as_str() {
-                body = &schemas[r.trim_start_matches("#/components/schemas/")];
+        let defs = &ours["$defs"];
+        let sent = |endpoints: &[&str]| {
+            let mut sent = BTreeSet::new();
+            for endpoint in endpoints {
+                let path = format!("/repos/{{owner}}/{{repo}}/actions{endpoint}");
+                let content = &api["paths"][&path]["put"]["requestBody"]["content"];
+                let mut body = &content["application/json"]["schema"];
+                if let Some(r) = body["$ref"].as_str() {
+                    body = &schemas[r.trim_start_matches("#/components/schemas/")];
+                }
+                sent.extend(body["properties"].as_object().unwrap().keys().cloned());
             }
-            sent.extend(body["properties"].as_object().unwrap().keys().cloned());
-        }
-        let ours: BTreeSet<String> = actions
-            .keys()
-            .filter(|key| *key != "selected_actions")
-            .cloned()
-            .collect();
-        assert_eq!(ours, sent, "keys of actions");
+            sent
+        };
+        // Keys by the API's name
+        let keys = |properties: &serde_json::Map<String, Json>| -> BTreeSet<String> {
+            properties
+                .iter()
+                .filter(|(_, p)| p["$ref"].is_null())
+                .map(|(key, p)| p["x-github-api-name"].as_str().unwrap_or(key).to_string())
+                .collect()
+        };
+
+        let actions = defs["Actions"]["properties"].as_object().unwrap();
+        let endpoints = [
+            "/permissions",
+            "/permissions/workflow",
+            "/permissions/fork-pr-contributor-approval",
+        ];
+        assert_eq!(keys(actions), sent(&endpoints), "keys of actions");
+        let oidc = defs["OidcSubjectClaim"]["properties"].as_object().unwrap();
+        assert_eq!(
+            keys(oidc),
+            sent(&["/oidc/customization/sub"]),
+            "keys of actions.oidc_subject_claim"
+        );
 
         for (key, property) in actions {
             let Some(source) = property["x-github-source"].as_str() else {
                 continue;
             };
-            let documented = &schemas[source.strip_prefix(&prefix).unwrap()];
+            let mut documented = &schemas[source.strip_prefix(&prefix).unwrap()];
             assert!(documented.is_object(), "{key}: {source} is not documented");
+            // A key ghrs renames is a property of the schema it names
+            if let Some(name) = property["x-github-api-name"].as_str() {
+                documented = &documented["properties"][name];
+            }
             let values = |v: &Json| -> BTreeSet<String> {
                 v["enum"]
                     .as_array()

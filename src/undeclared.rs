@@ -6,7 +6,8 @@ use serde_json::Value as Json;
 
 use crate::diagnostic::{Applicability, Code, Diagnostic, Edit};
 use crate::model::{
-    Actions, Config, DismissalRestriction, Repository, RequiredStatusChecks, Rules, SelectedActions,
+    Actions, Config, DismissalRestriction, OidcSubjectClaim, Repository, RequiredStatusChecks,
+    Rules, SelectedActions,
 };
 use crate::plan::Scope;
 use crate::schema::rule_to_api;
@@ -17,8 +18,9 @@ use crate::validate::entry_path;
 /// that covers none of them, since it is either stale or a mistake.
 ///
 /// `owned_by_org` decides whether `dismissal_restriction`, which personal repositories lack, is
-/// a setting.
-pub fn find(config: &Config, owned_by_org: bool) -> (Vec<String>, Vec<Diagnostic>) {
+/// a setting, and `public` whether `fork_pr_contributor_approval`, which private repositories
+/// lack, is.
+pub fn find(config: &Config, owned_by_org: bool, public: bool) -> (Vec<String>, Vec<Diagnostic>) {
     let unmanaged = &config.meta.unmanaged;
     let mut walker = Walker {
         unmanaged,
@@ -30,22 +32,37 @@ pub fn find(config: &Config, owned_by_org: bool) -> (Vec<String>, Vec<Diagnostic
     walker.table("repository", &repository, Repository::KEYS, &[], &[]);
 
     let actions = serde_json::to_value(&config.actions).unwrap_or_default();
+    let mut skip = Vec::new();
     // selected_actions has no effect unless allowed_actions is selected
-    let unselected = config
+    if config
         .actions
         .allowed_actions
         .as_deref()
-        .is_some_and(|allowed| allowed != "selected");
+        .is_some_and(|allowed| allowed != "selected")
+    {
+        skip.push("selected_actions");
+    }
+    if !public {
+        skip.push("fork_pr_contributor_approval");
+    }
+    // include_claim_keys has no effect under the default template
+    let custom = config
+        .actions
+        .oidc_subject_claim
+        .as_ref()
+        .is_some_and(|oidc| oidc.use_default == Some(false));
+    if !custom {
+        skip.push("oidc_subject_claim.include_claim_keys");
+    }
     walker.table(
         "actions",
         &actions,
         Actions::KEYS,
-        &[("selected_actions", SelectedActions::KEYS)],
-        if unselected {
-            &["selected_actions"]
-        } else {
-            &[]
-        },
+        &[
+            ("selected_actions", SelectedActions::KEYS),
+            ("oidc_subject_claim", OidcSubjectClaim::KEYS),
+        ],
+        &skip,
     );
 
     for ruleset in &config.rulesets {
@@ -147,7 +164,7 @@ impl Walker<'_> {
     /// Reports the keys of the table at `path` that `declared` leaves out, or the table itself
     /// when it leaves out every key and `meta.unmanaged` covers none. Returns whether it did the
     /// latter. `nested` gives the keys of the tables inside, and `skip` the keys that are not
-    /// settings here.
+    /// settings here, with those of a table inside written as `table.key`.
     fn table(
         &mut self,
         path: &str,
@@ -162,7 +179,11 @@ impl Walker<'_> {
             let at = format!("{path}.{key}");
             let value = declared.get(*key);
             if let Some((_, inner)) = nested.iter().find(|(k, _)| k == key) {
-                let all = self.table(&at, value.unwrap_or(&Json::Null), inner, &[], &[]);
+                let inner_skip: Vec<&str> = skip
+                    .iter()
+                    .filter_map(|s| s.strip_prefix(*key)?.strip_prefix('.'))
+                    .collect();
+                let all = self.table(&at, value.unwrap_or(&Json::Null), inner, &[], &inner_skip);
                 whole &= value.is_none() && all;
             } else if value.is_some() || self.covered(&at) {
                 whole = false;
@@ -201,7 +222,7 @@ mod tests {
 
     fn find_in(text: &str, owned_by_org: bool) -> (Vec<String>, Vec<String>) {
         let config = validate::parse(text).unwrap();
-        let (paths, errors) = find(&config, owned_by_org);
+        let (paths, errors) = find(&config, owned_by_org, true);
         let errors = errors
             .iter()
             .map(|e| e.path.clone().unwrap_or_default())
@@ -232,8 +253,10 @@ mod tests {
                 "actions.sha_pinning_required",
                 "actions.default_workflow_permissions",
                 "actions.can_approve_pull_request_reviews",
+                "actions.fork_pr_contributor_approval",
                 "actions.selected_actions.verified_allowed",
                 "actions.selected_actions.patterns_allowed",
+                "actions.oidc_subject_claim",
             ]
         );
     }
@@ -242,9 +265,29 @@ mod tests {
     fn selected_actions_counts_only_while_selected() {
         let text = "[actions]\nenabled = true\nallowed_actions = \"all\"\n\
             sha_pinning_required = false\ndefault_workflow_permissions = \"read\"\n\
-            can_approve_pull_request_reviews = false\n";
+            can_approve_pull_request_reviews = false\n\
+            fork_pr_contributor_approval = \"first_time_contributors\"\n\
+            [actions.oidc_subject_claim]\nuse_default = true\nuse_immutable_subject = true\n";
         let (paths, _) = find_in(text, false);
         assert_eq!(paths, ["repository"]);
+    }
+
+    #[test]
+    fn skips_what_has_no_effect_on_the_repository() {
+        let text = "[actions]\nenabled = true\nallowed_actions = \"all\"\n\
+            sha_pinning_required = false\ndefault_workflow_permissions = \"read\"\n\
+            can_approve_pull_request_reviews = false\n\
+            [actions.oidc_subject_claim]\nuse_default = false\nuse_immutable_subject = true\n";
+        let config = validate::parse(text).unwrap();
+        // Private repositories have no fork PR approval
+        let (paths, _) = find(&config, false, false);
+        assert_eq!(
+            paths,
+            [
+                "repository",
+                "actions.oidc_subject_claim.include_claim_keys"
+            ]
+        );
     }
 
     #[test]

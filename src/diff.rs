@@ -11,8 +11,9 @@ use serde_json::{Map, Value as Json, json};
 use crate::model::{Actions, Repository};
 use crate::resolve::Directory;
 use crate::schema::{
-    ACTORS_WITHOUT_ID, ALLOWED_ACTIONS, WORKFLOW_PERMISSIONS, actor_type_to_toml,
-    for_each_review_actor, review_actor_type_to_toml, rule_to_api, rule_to_toml,
+    ACTORS_WITHOUT_ID, ALLOWED_ACTIONS, FORK_PR_APPROVAL_POLICIES, WORKFLOW_PERMISSIONS,
+    actor_type_to_toml, for_each_review_actor, review_actor_type_to_toml, rule_to_api,
+    rule_to_toml,
 };
 use crate::state::{Actor, RulesetState};
 
@@ -95,17 +96,19 @@ pub fn repository(decl: &Repository, current: &Json) -> ResourceChange {
 }
 
 /// Compare only the declared fields. `current` has the declaration's shape, with
-/// `selected_actions` only when GitHub returned it.
+/// `selected_actions` and `fork_pr_contributor_approval` only when GitHub returned them.
 pub fn actions(decl: &Actions, current: &Json) -> ResourceChange {
     let mut fields = Fields::default();
     let declared = serde_json::to_value(decl).unwrap_or_default();
 
     for (key, want) in declared.as_object().into_iter().flatten() {
-        if key == "selected_actions" {
+        if key == "selected_actions" || key == "oidc_subject_claim" {
+            // include_claim_keys gives the order of the claims, while patterns_allowed is a set
+            let ordered = key == "oidc_subject_claim";
             for (k, want) in want.as_object().into_iter().flatten() {
                 let path = format!("{key}.{k}");
                 match (current[key].get(k), want) {
-                    (have, Json::Array(want)) => {
+                    (have, Json::Array(want)) if !ordered => {
                         let have = have.and_then(Json::as_array).map_or(&[][..], Vec::as_slice);
                         fields.set(&path, have, want);
                     }
@@ -504,9 +507,14 @@ const ACTIONS_WEAKENING: &[(&str, Weakens)] = &[
         Weakens::Widen(WORKFLOW_PERMISSIONS),
     ),
     ("can_approve_pull_request_reviews", Weakens::Enable),
+    (
+        "fork_pr_contributor_approval",
+        Weakens::Widen(FORK_PR_APPROVAL_POLICIES),
+    ),
     ("selected_actions.github_owned_allowed", Weakens::Enable),
     ("selected_actions.verified_allowed", Weakens::Enable),
     ("selected_actions.patterns_allowed", Weakens::Add),
+    ("oidc_subject_claim.use_immutable_subject", Weakens::Disable),
 ];
 
 #[derive(Clone, Copy)]
@@ -1192,6 +1200,53 @@ mod tests {
         )
         .unwrap();
         let change = actions(&decl, &actions_current("all"));
+        assert!(change.destructive.is_empty());
+    }
+
+    #[test]
+    fn include_claim_keys_compare_in_order() {
+        let decl: Actions = toml::from_str(
+            "[oidc_subject_claim]\nuse_default = false\n\
+            include_claim_keys = [\"repo\", \"context\"]",
+        )
+        .unwrap();
+        let current = json!({
+            "oidc_subject_claim": {
+                "use_default": false, "include_claim_keys": ["context", "repo"],
+            },
+        });
+        let change = actions(&decl, &current);
+        assert_eq!(
+            changed(&change),
+            [(Op::Change, "oidc_subject_claim.include_claim_keys")]
+        );
+        assert!(change.destructive.is_empty());
+    }
+
+    #[test]
+    fn flags_weakening_fork_pr_approval_and_oidc() {
+        let decl: Actions = toml::from_str(
+            "fork_pr_contributor_approval = \"first_time_contributors_new_to_github\"\n\
+            [oidc_subject_claim]\nuse_immutable_subject = false",
+        )
+        .unwrap();
+        let current = json!({
+            "fork_pr_contributor_approval": "first_time_contributors",
+            "oidc_subject_claim": { "use_default": true, "use_immutable_subject": true },
+        });
+        assert_eq!(
+            actions(&decl, &current).destructive,
+            [
+                "actions: changes fork_pr_contributor_approval from \"first_time_contributors\" \
+                to \"first_time_contributors_new_to_github\"",
+                "actions: changes oidc_subject_claim.use_immutable_subject from true to false",
+            ]
+        );
+
+        let decl: Actions =
+            toml::from_str("fork_pr_contributor_approval = \"all_external_contributors\"").unwrap();
+        let change = actions(&decl, &current);
+        assert_eq!(change.action, Action::Update);
         assert!(change.destructive.is_empty());
     }
 

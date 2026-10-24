@@ -113,8 +113,9 @@ impl Importer {
             }
         }
 
-        let (actions, unknown) =
-            actions::declaration(&actions::current(&mut self.gh, &target, true).await?)?;
+        let public = repository.visibility.as_deref() == Some("public");
+        let current = actions::current(&mut self.gh, &target, true, public).await?;
+        let (actions, unknown) = actions::declaration(&current)?;
         for key in unknown {
             self.warn(format!(
                 "actions.{key} is not supported; left it out of the declaration, and plan keeps \

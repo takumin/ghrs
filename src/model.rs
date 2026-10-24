@@ -188,9 +188,24 @@ optional_table! {
             "x-github-source" = rest_api_schema("actions-can-approve-pull-request-reviews")
         ))]
         can_approve_pull_request_reviews: bool,
+        /// Which fork pull requests need a maintainer's approval before their workflows run.
+        /// `all_external_contributors`: those of anyone who is not a collaborator or
+        /// Organization member. `first_time_contributors`: those of users who have not
+        /// contributed before. `first_time_contributors_new_to_github`: those of first-time
+        /// contributors who are also new to GitHub. Public repositories only. Set with
+        /// `PUT /repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval`
+        #[schemars(extend(
+            "enum" = schema::FORK_PR_APPROVAL_POLICIES,
+            "x-github-api-name" = "approval_policy",
+            "x-github-source" = rest_api_schema("actions-fork-pr-contributor-approval")
+        ))]
+        fork_pr_contributor_approval: String,
         /// What `allowed_actions = "selected"` allows besides the owner's actions, which it
         /// requires. Set with `PUT /repos/{owner}/{repo}/actions/permissions/selected-actions`
         selected_actions: SelectedActions,
+        /// The `sub` claim of the OIDC tokens workflows get. Set with
+        /// `PUT /repos/{owner}/{repo}/actions/oidc/customization/sub`
+        oidc_subject_claim: OidcSubjectClaim,
     }
 }
 
@@ -212,6 +227,22 @@ optional_table! {
         /// Patterns of actions and reusable workflows to allow, such as `monalisa/octocat@*`,
         /// `monalisa/octocat@v2` or `monalisa/*`. GitHub applies them to public repositories only
         patterns_allowed: Vec<String>,
+    }
+}
+
+optional_table! {
+    /// The template GitHub makes the `sub` claim from. Keys not written keep their current
+    /// values.
+    #[schemars(extend("x-github-source" = rest_api_schema("oidc-custom-sub-repo")))]
+    pub struct OidcSubjectClaim {
+        /// Uses the default template instead of `include_claim_keys`
+        use_default: bool,
+        /// Uses a `sub` claim that names the owner and the repository by ID as well, so that it
+        /// does not match a renamed or recreated repository
+        use_immutable_subject: bool,
+        /// Claims the `sub` claim is made of, in this order, such as `repo` or `context`. Needs
+        /// `use_default = false`
+        include_claim_keys: Vec<String>,
     }
 }
 

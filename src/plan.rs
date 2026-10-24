@@ -50,12 +50,10 @@ pub enum Step {
         /// topics are fully replaced via a separate endpoint
         topics: Option<Json>,
     },
-    /// Bodies for each Actions endpoint with changes, sent in this order: `selected_actions`
-    /// needs `allowed_actions = "selected"` to be set first
+    /// Bodies for each Actions endpoint with changes, by path under `/repos/{o}/{r}/actions`,
+    /// in the order to send them
     Actions {
-        permissions: Option<Json>,
-        selected_actions: Option<Json>,
-        workflow: Option<Json>,
+        writes: Vec<(&'static str, Json)>,
     },
     GrantCollaborator {
         login: String,
@@ -144,14 +142,7 @@ impl Step {
             Step::Repository { fields, topics } => {
                 usize::from(!fields.is_empty()) + usize::from(topics.is_some())
             }
-            Step::Actions {
-                permissions,
-                selected_actions,
-                workflow,
-            } => [permissions, selected_actions, workflow]
-                .iter()
-                .filter(|body| body.is_some())
-                .count(),
+            Step::Actions { writes } => writes.len(),
             _ => 1,
         }
     }
@@ -206,7 +197,8 @@ pub async fn run(
     let visibility = repo["visibility"].as_str().unwrap_or_default();
     let mut errors =
         validate::check_context(config, &target.owner, owned_by_org, visibility, &scope);
-    let (mut undeclared, unused) = undeclared::find(config, owned_by_org);
+    let public = validate::visibility(config, visibility, &scope) == "public";
+    let (mut undeclared, unused) = undeclared::find(config, owned_by_org, public);
     undeclared.retain(|path| undeclared::in_scope(path, &scope));
     errors.extend(unused);
     if strict {
@@ -228,7 +220,7 @@ pub async fn run(
     // Nothing to compare when nothing is declared, so spare the API calls
     if scope.actions && !config.actions.is_empty() {
         let with_selected = config.actions.selected_actions.is_some();
-        let current = actions::current(gh, target, with_selected).await?;
+        let current = actions::current(gh, target, with_selected, visibility == "public").await?;
         let change = diff::actions(&config.actions, &current);
         steps.extend(actions::step(&config.actions, &current, &change));
         changes.push(change);

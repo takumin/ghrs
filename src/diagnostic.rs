@@ -91,6 +91,9 @@ codes! {
     AllowedActionsNotAllowed = "E0501",
     WorkflowPermissionsNotAllowed = "E0502",
     SelectedActionsNeedSelected = "E0503",
+    ForkPrApprovalNotAllowed = "E0504",
+    ForkPrApprovalOnPrivate = "E0505",
+    ClaimKeysNeedCustomTemplate = "E0506",
 }
 
 impl Serialize for Code {
