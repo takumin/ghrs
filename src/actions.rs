@@ -59,8 +59,10 @@ fn object(v: Json) -> Result<Map<String, Json>> {
     }
 }
 
-/// The writes for the changed fields. Each endpoint is sent its fields as declared, or else as
-/// they are now, so it does not matter whether GitHub treats a missing field as unchanged.
+/// The writes for the changed fields, as paths under `/repos/{o}/{r}/actions` with their bodies,
+/// in the order to send them: `selected_actions` needs `allowed_actions = "selected"` to be set
+/// first. Each endpoint is sent its fields as declared, or else as they are now, so it does not
+/// matter whether GitHub treats a missing field as unchanged.
 pub fn step(decl: &Actions, current: &Json, change: &ResourceChange) -> Option<Step> {
     let declared = serde_json::to_value(decl).ok()?;
     let changed: Vec<&str> = change
@@ -69,9 +71,6 @@ pub fn step(decl: &Actions, current: &Json, change: &ResourceChange) -> Option<S
         .filter(|f| f.op != Op::Same)
         .map(|f| f.path.as_str())
         .collect();
-    if changed.is_empty() {
-        return None;
-    }
     let body = |keys: &[&str], declared: &Json, current: &Json| {
         let fields: Map<String, Json> = keys
             .iter()
@@ -83,20 +82,28 @@ pub fn step(decl: &Actions, current: &Json, change: &ResourceChange) -> Option<S
         Json::Object(fields)
     };
     let touches = |keys: &[&str]| changed.iter().any(|path| keys.contains(path));
-    Some(Step::Actions {
-        permissions: touches(PERMISSIONS).then(|| body(PERMISSIONS, &declared, current)),
-        selected_actions: changed
-            .iter()
-            .any(|path| path.starts_with("selected_actions."))
-            .then(|| {
-                body(
-                    SelectedActions::KEYS,
-                    &declared["selected_actions"],
-                    &current["selected_actions"],
-                )
-            }),
-        workflow: touches(WORKFLOW).then(|| body(WORKFLOW, &declared, current)),
-    })
+    let touches_table = |table: &str| {
+        changed.iter().any(|path| {
+            path.strip_prefix(table)
+                .is_some_and(|rest| rest.starts_with('.'))
+        })
+    };
+    let table = |name: &str, keys: &[&str]| body(keys, &declared[name], &current[name]);
+
+    let mut writes = Vec::new();
+    if touches(PERMISSIONS) {
+        writes.push(("/permissions", body(PERMISSIONS, &declared, current)));
+    }
+    if touches_table("selected_actions") {
+        writes.push((
+            "/permissions/selected-actions",
+            table("selected_actions", SelectedActions::KEYS),
+        ));
+    }
+    if touches(WORKFLOW) {
+        writes.push(("/permissions/workflow", body(WORKFLOW, &declared, current)));
+    }
+    (!writes.is_empty()).then_some(Step::Actions { writes })
 }
 
 /// The settings as a declaration, and the keys GitHub returned that ghrs does not know.
@@ -135,15 +142,12 @@ mod tests {
         toml::from_str(text).unwrap()
     }
 
-    fn bodies(step: Option<Step>) -> (Option<Json>, Option<Json>, Option<Json>) {
-        match step {
-            Some(Step::Actions {
-                permissions,
-                selected_actions,
-                workflow,
-            }) => (permissions, selected_actions, workflow),
+    fn writes(decl: &Actions, current: &Json) -> Vec<(&'static str, Json)> {
+        let change = diff::actions(decl, current);
+        match step(decl, current, &change) {
+            Some(Step::Actions { writes }) => writes,
             Some(_) => panic!("not an actions step"),
-            None => (None, None, None),
+            None => Vec::new(),
         }
     }
 
@@ -160,21 +164,19 @@ mod tests {
     #[test]
     fn writes_only_the_endpoints_whose_fields_changed() {
         let decl = decl("sha_pinning_required = true\ndefault_workflow_permissions = \"read\"");
-        let change = diff::actions(&decl, &current());
-        let (permissions, selected, workflow) = bodies(step(&decl, &current(), &change));
         // `enabled` is required, so the current value goes along
         assert_eq!(
-            permissions,
-            Some(json!({
-                "enabled": true, "allowed_actions": "all", "sha_pinning_required": true,
-            }))
+            writes(&decl, &current()),
+            [(
+                "/permissions",
+                json!({
+                    "enabled": true, "allowed_actions": "all", "sha_pinning_required": true,
+                })
+            )]
         );
-        assert_eq!(selected, None);
-        assert_eq!(workflow, None);
 
         let decl = self::decl("enabled = true");
-        let change = diff::actions(&decl, &current());
-        assert!(step(&decl, &current(), &change).is_none());
+        assert!(writes(&decl, &current()).is_empty());
     }
 
     #[test]
@@ -183,30 +185,33 @@ mod tests {
             "allowed_actions = \"selected\"\n\
             [selected_actions]\npatterns_allowed = [\"aquaproj/*\"]",
         );
-        let change = diff::actions(&decl, &current());
-        let (permissions, selected, workflow) = bodies(step(&decl, &current(), &change));
-        assert_eq!(permissions.unwrap()["allowed_actions"], "selected");
+        let w = writes(&decl, &current());
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[0].0, "/permissions");
+        assert_eq!(w[0].1["allowed_actions"], "selected");
         assert_eq!(
-            selected,
-            Some(json!({ "patterns_allowed": ["aquaproj/*"] }))
+            w[1],
+            (
+                "/permissions/selected-actions",
+                json!({ "patterns_allowed": ["aquaproj/*"] })
+            )
         );
-        assert_eq!(workflow, None);
 
         let mut cur = current();
         cur["allowed_actions"] = json!("selected");
         cur["selected_actions"] = json!({
             "github_owned_allowed": true, "verified_allowed": false, "patterns_allowed": [],
         });
-        let change = diff::actions(&decl, &cur);
-        let (permissions, selected, _) = bodies(step(&decl, &cur, &change));
-        assert_eq!(permissions, None);
         assert_eq!(
-            selected,
-            Some(json!({
-                "github_owned_allowed": true,
-                "verified_allowed": false,
-                "patterns_allowed": ["aquaproj/*"],
-            }))
+            writes(&decl, &cur),
+            [(
+                "/permissions/selected-actions",
+                json!({
+                    "github_owned_allowed": true,
+                    "verified_allowed": false,
+                    "patterns_allowed": ["aquaproj/*"],
+                })
+            )]
         );
     }
 

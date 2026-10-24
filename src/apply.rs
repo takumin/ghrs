@@ -70,21 +70,10 @@ async fn execute(gh: &mut GitHub, target: &RepoRef, step: &Step) -> Result<()> {
                 .await?;
             }
         }
-        Step::Actions {
-            permissions,
-            selected_actions,
-            workflow,
-        } => {
-            let writes = [
-                ("", permissions),
-                ("/selected-actions", selected_actions),
-                ("/workflow", workflow),
-            ];
+        Step::Actions { writes } => {
             for (endpoint, body) in writes {
-                if let Some(body) = body {
-                    let route = format!("/repos/{target}/actions/permissions{endpoint}");
-                    gh.send(Method::Put, &route, Some(body)).await?;
-                }
+                let route = format!("/repos/{target}/actions{endpoint}");
+                gh.send(Method::Put, &route, Some(body)).await?;
             }
         }
         Step::GrantCollaborator { login, permission } => {

@@ -50,12 +50,10 @@ pub enum Step {
         /// topics are fully replaced via a separate endpoint
         topics: Option<Json>,
     },
-    /// Bodies for each Actions endpoint with changes, sent in this order: `selected_actions`
-    /// needs `allowed_actions = "selected"` to be set first
+    /// Bodies for each Actions endpoint with changes, by path under `/repos/{o}/{r}/actions`,
+    /// in the order to send them
     Actions {
-        permissions: Option<Json>,
-        selected_actions: Option<Json>,
-        workflow: Option<Json>,
+        writes: Vec<(&'static str, Json)>,
     },
     GrantCollaborator {
         login: String,
@@ -144,14 +142,7 @@ impl Step {
             Step::Repository { fields, topics } => {
                 usize::from(!fields.is_empty()) + usize::from(topics.is_some())
             }
-            Step::Actions {
-                permissions,
-                selected_actions,
-                workflow,
-            } => [permissions, selected_actions, workflow]
-                .iter()
-                .filter(|body| body.is_some())
-                .count(),
+            Step::Actions { writes } => writes.len(),
             _ => 1,
         }
     }
