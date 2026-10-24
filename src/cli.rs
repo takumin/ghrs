@@ -52,6 +52,8 @@ pub enum Command {
     Import(ImportArgs),
     /// Report only whether there is any difference
     Drift(DriftArgs),
+    /// Validate declaration files without calling the GitHub API
+    Lint(LintArgs),
     /// Write the JSON Schema: key meanings, types, and allowed values
     Schema(SchemaArgs),
     /// Show what keys of the declaration file mean, and their names in the GitHub API
@@ -67,6 +69,7 @@ impl Command {
             Command::Plan(args) => args.json,
             Command::Apply(args) => args.plan.json,
             Command::Drift(args) => args.json,
+            Command::Lint(args) => args.json,
             Command::Import(_)
             | Command::Schema(_)
             | Command::Explain(_)
@@ -183,6 +186,17 @@ pub struct DriftArgs {
     /// Fail when a setting ghrs knows is neither written nor listed in meta.unmanaged
     #[arg(long)]
     pub strict: bool,
+}
+
+#[derive(Args)]
+pub struct LintArgs {
+    /// Declaration files to validate
+    #[arg(value_name = "PATH", default_value = ".ghrs.toml")]
+    pub paths: Vec<PathBuf>,
+
+    /// Output JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]

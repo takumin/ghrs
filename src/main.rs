@@ -27,7 +27,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use apply::Outcome;
-use cli::{ApplyArgs, AuthArgs, Cli, DriftArgs, ImportArgs, PlanArgs, Resource};
+use cli::{ApplyArgs, AuthArgs, Cli, DriftArgs, ImportArgs, LintArgs, PlanArgs, Resource};
 use diagnostic::Diagnostics;
 use github::GitHub;
 use model::Config;
@@ -73,6 +73,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         cli::Command::Plan(args) => plan(args, &cli.auth).await,
         cli::Command::Apply(args) => apply(args, &cli.auth).await,
         cli::Command::Drift(args) => drift(args, &cli.auth).await,
+        cli::Command::Lint(args) => lint(args),
         cli::Command::Schema(args) => {
             let text = format!("{}\n", serde_json::to_string_pretty(&model::json_schema())?);
             write_output(args.out.as_deref(), &text)?;
@@ -300,6 +301,40 @@ async fn drift(args: DriftArgs, auth: &AuthArgs) -> Result<ExitCode> {
     })
 }
 
+/// Validate each declaration file with what `plan` checks before its first API call. Reads no
+/// credentials, so it runs anywhere the files are.
+fn lint(args: LintArgs) -> Result<ExitCode> {
+    let mut reports = Vec::new();
+    for path in &args.paths {
+        let text = read_config(path)?;
+        let mut diagnostics = Diagnostics::new(validate::lint(&text));
+        diagnostics.file = Some(path.clone());
+        reports.push(diagnostics);
+    }
+    let failed = reports.iter().any(|d| !d.diagnostics.is_empty());
+
+    if args.json {
+        out(&format!(
+            "{}
+",
+            serde_json::to_string_pretty(&reports)?
+        ))?;
+    } else {
+        for diagnostics in reports.iter().filter(|d| !d.diagnostics.is_empty()) {
+            note(&format!(
+                "{diagnostics}
+"
+            ));
+        }
+    }
+
+    Ok(if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
 /// Common preamble for plan / apply / drift. apply recomputes the plan before applying.
 async fn compute_plan(
     path: &Path,
@@ -376,18 +411,20 @@ fn confirm(plan: &plan::Plan, target: &RepoRef) -> Result<bool> {
 }
 
 fn load_config(path: &Path) -> Result<Config> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
+    let text = read_config(path)?;
+    validate::parse(&text).map_err(|d| in_file(d.into(), path))
+}
+
+fn read_config(path: &Path) -> Result<String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => bail!(
             "{} not found; create it from the current settings with ghrs import --out {}",
             path.display(),
             path.display()
         ),
-        Err(err) => {
-            return Err(err).with_context(|| format!("cannot read {}", path.display()));
-        }
-    };
-    validate::parse(&text).map_err(|d| in_file(d.into(), path))
+        Err(err) => Err(err).with_context(|| format!("cannot read {}", path.display())),
+    }
 }
 
 /// Determine the target repository in the order `--repo` -> `[meta]` -> git remote.

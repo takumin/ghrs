@@ -51,6 +51,15 @@ pub fn parse(text: &str) -> Result<Config, Diagnostics> {
     serde_path_to_error::deserialize(de).map_err(|err| one(deserialize_error(err, text)))
 }
 
+/// Every diagnostic `parse` and `check` find in the declaration file, for `lint`. Credentials are
+/// not known offline, so `integration = "self"` is accepted as App authentication would.
+pub fn lint(text: &str) -> Vec<Diagnostic> {
+    match parse(text) {
+        Ok(config) => check(&config, true),
+        Err(diagnostics) => diagnostics.diagnostics,
+    }
+}
+
 fn deserialize_error(err: serde_path_to_error::Error<toml::de::Error>, text: &str) -> Diagnostic {
     use serde_path_to_error::Segment;
     let path = key_path(err.path());
@@ -1089,6 +1098,19 @@ checks = [{ context = "test" }, { context = "build", integration = "github-actio
         );
         let errors = errors(&toml);
         assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn lint_reports_parse_and_check_errors() {
+        let codes = |toml: &str| lint(toml).iter().map(|d| d.code).collect::<Vec<_>>();
+        assert_eq!(codes("[repository]\nhas_issue = true"), [Code::UnknownKey]);
+        assert_eq!(
+            codes("[repository]\nvisibility = \"internal\""),
+            [Code::VisibilityNotAllowed]
+        );
+        // The credential is unknown offline, so `self` is not rejected
+        let toml = ruleset("bypass_actors = [{ type = \"integration\", name = \"self\" }]");
+        assert!(codes(&toml).is_empty());
     }
 
     #[test]

@@ -56,6 +56,7 @@ The target repository is taken from `--repo OWNER/NAME`, then from `[meta]` in t
 | `ghrs apply` | Apply the difference to GitHub |
 | `ghrs import` | Export the current settings in `.ghrs.toml` format |
 | `ghrs drift` | Report only whether there is any difference |
+| `ghrs lint [PATH...]` | Validate declaration files without calling the GitHub API |
 | `ghrs schema` | Write the JSON Schema: key meanings, types, and allowed values |
 | `ghrs explain [KEY]` | Show what keys mean, and their names in the GitHub API |
 | `ghrs completion <SHELL>` | Write a shell completion script to standard output |
@@ -80,6 +81,12 @@ Without a terminal, `apply` refuses to proceed unless `--yes` is given.
 `drift --exit-code` exits with status 2 when there is a difference, which is useful for scheduled checks in CI.
 `drift` also takes `--strict`.
 Like `plan` without `--prune`, `drift` does not count undeclared rulesets, collaborators, and teams as a difference.
+
+`lint` runs the validation `plan` does before its first API call, so it needs neither credentials nor network access, and suits pre-commit hooks and CI.
+It validates each file given (default: `.ghrs.toml`), reports the errors of every file, and exits with status 1 when any file has one.
+Checks that depend on the repository on GitHub, such as whether the owner is an organization, are left to `plan`.
+`integration = "self"` is accepted, since the credential is not known.
+With `--json`, it writes an array with the file and its diagnostics for each file.
 
 ## JSON Schema
 
