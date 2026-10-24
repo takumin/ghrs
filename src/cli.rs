@@ -93,6 +93,10 @@ pub struct PlanArgs {
     #[arg(long)]
     pub prune: bool,
 
+    /// Fail when a setting ghrs knows is neither written nor listed in meta.unmanaged
+    #[arg(long)]
+    pub strict: bool,
+
     /// Also show unchanged fields
     #[arg(long)]
     pub verbose: bool,
@@ -175,6 +179,10 @@ pub struct DriftArgs {
     /// Exit with status 2 when there is a difference
     #[arg(long)]
     pub exit_code: bool,
+
+    /// Fail when a setting ghrs knows is neither written nor listed in meta.unmanaged
+    #[arg(long)]
+    pub strict: bool,
 }
 
 #[derive(Args)]

@@ -42,6 +42,9 @@ codes! {
     TooManyRulesets = "E0102",
     RulesetsOnPrivate = "E0103",
     InvalidMeta = "E0104",
+    UnknownUnmanaged = "E0105",
+    UnusedUnmanaged = "E0106",
+    UndeclaredSetting = "E0107",
     // E02xx: ruleset
     // E0201 (duplicate ruleset name) is retired: rulesets are keyed by name, so TOML itself
     // rejects a duplicate

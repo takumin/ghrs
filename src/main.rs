@@ -17,6 +17,7 @@ mod repo;
 mod resolve;
 mod schema;
 mod state;
+mod undeclared;
 mod validate;
 
 use anyhow::{Context, Result, bail};
@@ -142,7 +143,15 @@ fn schema_header(schema: Option<&str>) -> String {
 }
 
 async fn plan(args: PlanArgs, auth: &AuthArgs) -> Result<ExitCode> {
-    let (gh, _, plan) = compute_plan(&args.config, args.repo, &args.only, args.prune, auth).await?;
+    let (gh, _, plan) = compute_plan(
+        &args.config,
+        args.repo,
+        &args.only,
+        args.prune,
+        args.strict,
+        auth,
+    )
+    .await?;
 
     if args.json {
         out(&format!("{}\n", serde_json::to_string_pretty(&plan)?))?;
@@ -213,7 +222,7 @@ fn out(text: &str) -> Result<()> {
 async fn apply(args: ApplyArgs, auth: &AuthArgs) -> Result<ExitCode> {
     let p = &args.plan;
     let (mut gh, target, plan) =
-        compute_plan(&p.config, p.repo.clone(), &p.only, p.prune, auth).await?;
+        compute_plan(&p.config, p.repo.clone(), &p.only, p.prune, p.strict, auth).await?;
 
     // With --json, stdout carries only JSON. The plan display and confirmation prompt go to stderr
     if p.json {
@@ -267,7 +276,8 @@ async fn apply(args: ApplyArgs, auth: &AuthArgs) -> Result<ExitCode> {
 }
 
 async fn drift(args: DriftArgs, auth: &AuthArgs) -> Result<ExitCode> {
-    let (gh, _, plan) = compute_plan(&args.config, args.repo, &[], false, auth).await?;
+    let (gh, _, plan) =
+        compute_plan(&args.config, args.repo, &[], false, args.strict, auth).await?;
     let drifted = plan.summary.add + plan.summary.change + plan.summary.destroy > 0;
 
     if args.json {
@@ -296,6 +306,7 @@ async fn compute_plan(
     repo: Option<RepoRef>,
     only: &[Resource],
     prune: bool,
+    strict: bool,
     auth: &AuthArgs,
 ) -> Result<(GitHub, RepoRef, plan::Plan)> {
     let config = load_config(path)?;
@@ -315,9 +326,17 @@ async fn compute_plan(
     let target = resolve_target(repo, &config)?;
 
     let (mut gh, self_app) = auth::connect(credential, &target).await?;
-    let plan = plan::run(&mut gh, &config, &target, only, prune, self_app.as_ref())
-        .await
-        .map_err(|err| in_file(err, path))?;
+    let plan = plan::run(
+        &mut gh,
+        &config,
+        &target,
+        only,
+        prune,
+        strict,
+        self_app.as_ref(),
+    )
+    .await
+    .map_err(|err| in_file(err, path))?;
     Ok((gh, target, plan))
 }
 

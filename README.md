@@ -68,6 +68,7 @@ Common options for `plan` and `apply`:
 | `--config PATH` | Declaration file (default: `.ghrs.toml`) |
 | `--only RESOURCE,...` | Limit to `repository`, `actions`, `ruleset`, `collaborator`, `team` |
 | `--prune` | Delete rulesets, collaborators, and teams that are not declared |
+| `--strict` | Fail when a setting ghrs knows is neither written nor listed in `meta.unmanaged` |
 | `--verbose` | Also show unchanged fields |
 | `--json` | Output JSON |
 
@@ -77,6 +78,7 @@ For an existing ruleset, that covers deleting it, disabling it, changing its tar
 Without a terminal, `apply` refuses to proceed unless `--yes` is given.
 
 `drift --exit-code` exits with status 2 when there is a difference, which is useful for scheduled checks in CI.
+`drift` also takes `--strict`.
 Like `plan` without `--prune`, `drift` does not count undeclared rulesets, collaborators, and teams as a difference.
 
 ## JSON Schema
@@ -115,6 +117,8 @@ Validation errors under `rules` carry the same reference.
 [meta]
 owner = "takumin"
 repo = "ghrs"
+# Settings left unchanged on purpose, so plan does not report them as unwritten.
+unmanaged = ["repository.homepage"]
 
 # Only the fields written here are compared. Omitted fields are left untouched.
 [repository]
@@ -173,6 +177,13 @@ permission = "push"      # pull, triage, push, maintain, admin
 [team.maintainers]       # keyed by slug
 permission = "maintain"
 ```
+
+Settings ghrs knows but the file leaves unwritten keep their current values: fields of `[repository]` and `[actions]`, and parameters of an enabled rule, including every parameter of a rule written as `true`.
+`plan`, `apply`, and `drift` list them in a note (`undeclared` with `--json`), naming a table as a whole when none of its keys is written.
+List the ones to leave unchanged on purpose in `meta.unmanaged`, as key paths; a table covers every key in it.
+An entry that is not a key path, or covers no unwritten setting, is an error.
+`--strict` turns each remaining unwritten setting into an error, which catches a setting a newer ghrs adds before it goes unmanaged without notice.
+`import` writes every setting GitHub returns.
 
 Actors are written by name (App slug, team slug, user login, role name), and ghrs resolves them to IDs.
 When running as a GitHub App, `integration = "self"` refers to that App.

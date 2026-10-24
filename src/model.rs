@@ -22,7 +22,8 @@ use std::collections::BTreeMap;
 use crate::schema::{self, rest_api_schema};
 
 /// Declares a table whose fields are all optional, and lists its keys in `KEYS`. import uses
-/// `KEYS` to tell what ghrs knows from what GitHub added later.
+/// `KEYS` to tell what ghrs knows from what GitHub added later, and plan to find the keys left
+/// unwritten.
 macro_rules! optional_table {
     (
         $(#[$meta:meta])*
@@ -42,8 +43,6 @@ macro_rules! optional_table {
         }
 
         impl $name {
-            // Unused for tables that are not a rule's parameters
-            #[allow(dead_code)]
             pub const KEYS: &[&str] = &[$(stringify!($field)),*];
         }
     };
@@ -53,7 +52,8 @@ macro_rules! optional_table {
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    /// The target repository, used when --repo is not given
+    /// The target repository, used when --repo is not given, and the settings left unchanged on
+    /// purpose
     #[serde(default, skip_serializing_if = "Meta::is_empty")]
     pub meta: Meta,
     /// Repository settings. Only the fields written are compared
@@ -94,8 +94,9 @@ pub struct Config {
     pub teams: Vec<Team>,
 }
 
-/// The target repository. --repo takes precedence over it, and without either, the target is
-/// taken from the git remote.
+/// The target repository, and the settings ghrs leaves unchanged on purpose. --repo takes
+/// precedence over `owner` and `repo`, and without either, the target is taken from the git
+/// remote.
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Meta {
@@ -105,63 +106,55 @@ pub struct Meta {
     /// Repository name, without the owner
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// Key paths of settings to leave unchanged without declaring them, such as `actions` or
+    /// `ruleset.main.rules.pull_request.required_reviewers`. A table covers every key in it.
+    /// plan reports the settings ghrs knows but neither the file nor this list mentions, and
+    /// --strict rejects them
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unmanaged: Vec<String>,
 }
 
 impl Meta {
     fn is_empty(&self) -> bool {
-        self.owner.is_none() && self.repo.is_none()
+        self.owner.is_none() && self.repo.is_none() && self.unmanaged.is_empty()
     }
 }
 
-/// Repository settings, with the names of `PATCH /repos/{owner}/{repo}`. Only the fields that are
-/// written are compared. Unwritten fields are left untouched.
-#[derive(Serialize, Deserialize, Default, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Repository {
-    /// A short description of the repository
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// A URL with more information about the repository
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub homepage: Option<String>,
-    /// Rulesets are not available on private repositories on the free plan
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(extend("enum" = schema::VISIBILITIES))]
-    pub visibility: Option<String>,
-    /// Enables issues
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_issues: Option<bool>,
-    /// Enables the wiki
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_wiki: Option<bool>,
-    /// Enables projects
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_projects: Option<bool>,
-    /// Enables discussions. `PATCH /repos/{owner}/{repo}` does not document it; the repository
-    /// object documents it as whether discussions are enabled
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_discussions: Option<bool>,
-    /// Allows merging pull requests with a merge commit
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_merge_commit: Option<bool>,
-    /// Allows squash-merging pull requests
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_squash_merge: Option<bool>,
-    /// Allows rebase-merging pull requests
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_rebase_merge: Option<bool>,
-    /// Allows auto-merge on pull requests
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_auto_merge: Option<bool>,
-    /// Deletes head branches automatically when pull requests are merged
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delete_branch_on_merge: Option<bool>,
-    /// Default branch. The branch must already exist
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_branch: Option<String>,
-    /// Set with `PUT /repos/{owner}/{repo}/topics`
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub topics: Option<Vec<String>>,
+optional_table! {
+    /// Repository settings, with the names of `PATCH /repos/{owner}/{repo}`. Only the fields that
+    /// are written are compared. Unwritten fields are left untouched.
+    pub struct Repository {
+        /// A short description of the repository
+        description: String,
+        /// A URL with more information about the repository
+        homepage: String,
+        /// Rulesets are not available on private repositories on the free plan
+        #[schemars(extend("enum" = schema::VISIBILITIES))]
+        visibility: String,
+        /// Enables issues
+        has_issues: bool,
+        /// Enables the wiki
+        has_wiki: bool,
+        /// Enables projects
+        has_projects: bool,
+        /// Enables discussions. `PATCH /repos/{owner}/{repo}` does not document it; the repository
+        /// object documents it as whether discussions are enabled
+        has_discussions: bool,
+        /// Allows merging pull requests with a merge commit
+        allow_merge_commit: bool,
+        /// Allows squash-merging pull requests
+        allow_squash_merge: bool,
+        /// Allows rebase-merging pull requests
+        allow_rebase_merge: bool,
+        /// Allows auto-merge on pull requests
+        allow_auto_merge: bool,
+        /// Deletes head branches automatically when pull requests are merged
+        delete_branch_on_merge: bool,
+        /// Default branch. The branch must already exist
+        default_branch: String,
+        /// Set with `PUT /repos/{owner}/{repo}/topics`
+        topics: Vec<String>,
+    }
 }
 
 optional_table! {
