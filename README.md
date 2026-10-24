@@ -257,6 +257,8 @@ aqua install
 task          # format, schema, lint, dependency policy check, test, doc, build
 task audit    # the policy check and the RustSec advisory scan
 task test
+task build:debug    # build dist/ghrs-debug-<target> and its sha256sum
+task build:release  # the same with the release profile (BUILD_TARGET picks the target)
 task schema   # regenerate schema/ghrs.schema.json (CI does this on pull requests)
 ```
 
