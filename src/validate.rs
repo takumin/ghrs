@@ -437,7 +437,8 @@ pub fn check_context(
                     );
                 }
                 for (path, actor) in pr.review_actors() {
-                    if actor.actor_type == "team" {
+                    // The error above already removes the whole dismissal_restriction
+                    if actor.actor_type == "team" && !path.starts_with("dismissal_restriction") {
                         errors.push(
                             Diagnostic::error(
                                 Code::TeamActorOnPersonal,
@@ -1371,6 +1372,16 @@ permission = "maintain"
             2
         );
         assert!(check_context(&config, "takumin", true, "public", &ALL).is_empty());
+
+        // A team in dismissal_restriction gets only the error that removes the whole table
+        let team =
+            pr("dismissal_restriction = { allowed_actors = [{ type = \"team\", name = \"t\" }] }");
+        let config: Config = toml::from_str(&team).unwrap();
+        let codes: Vec<Code> = check_context(&config, "takumin", false, "public", &ALL)
+            .iter()
+            .map(|d| d.code)
+            .collect();
+        assert_eq!(codes, [Code::DismissalRestrictionOnPersonal]);
     }
 
     #[test]
