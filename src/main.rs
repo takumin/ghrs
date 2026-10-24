@@ -317,17 +317,6 @@ fn lint(args: LintArgs) -> Result<ExitCode> {
             deny: args.deny,
         },
     };
-    if let Some(name) = [
-        &context.levels.allow,
-        &context.levels.warn,
-        &context.levels.deny,
-    ]
-    .into_iter()
-    .flatten()
-    .find(|name| !lints::is_name(name))
-    {
-        bail!("\"{name}\" is not a lint; write a lint code such as W0301, or a group");
-    }
     let format = if args.json {
         cli::Format::Json
     } else {
