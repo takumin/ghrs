@@ -1,6 +1,6 @@
 //! Settings ghrs knows but the declaration file leaves unwritten. plan keeps them at their current
 //! values, so a key forgotten, or one a newer ghrs added, would go unmanaged without notice. They
-//! are reported unless `meta.unmanaged` lists them.
+//! are reported unless `meta.unmanaged` lists them, and --strict rejects them.
 
 use serde_json::Value as Json;
 
@@ -108,6 +108,32 @@ pub fn in_scope(path: &str, scope: &Scope) -> bool {
         Some("ruleset") => scope.rulesets,
         _ => true,
     }
+}
+
+/// The errors --strict raises for unwritten settings.
+pub fn strict(paths: &[String]) -> Vec<Diagnostic> {
+    paths
+        .iter()
+        .map(|path| {
+            // A rule reported as a whole is enabled, with `true` or an empty table
+            let rule = path
+                .rsplit_once(".rules.")
+                .is_some_and(|(_, rule)| !rule.contains('.'));
+            let what = if rule {
+                "write its parameters in a table (`true` keeps the current ones)"
+            } else {
+                "write it out"
+            };
+            Diagnostic::error(
+                Code::UndeclaredSetting,
+                format!("{path} is left unwritten, so plan keeps its current value"),
+            )
+            .at(path)
+            .help(format!(
+                "{what}, or list it in meta.unmanaged to leave it unchanged on purpose"
+            ))
+        })
+        .collect()
 }
 
 struct Walker<'a> {

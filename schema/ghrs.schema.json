@@ -313,7 +313,7 @@
           "type": "string"
         },
         "unmanaged": {
-          "description": "Key paths of settings to leave unchanged without declaring them, such as `actions` or\n`ruleset.main.rules.pull_request.required_reviewers`. A table covers every key in it.\nplan reports the settings ghrs knows but neither the file nor this list mentions",
+          "description": "Key paths of settings to leave unchanged without declaring them, such as `actions` or\n`ruleset.main.rules.pull_request.required_reviewers`. A table covers every key in it.\nplan reports the settings ghrs knows but neither the file nor this list mentions, and\n--strict rejects them",
           "items": {
             "type": "string"
           },

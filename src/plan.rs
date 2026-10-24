@@ -193,6 +193,7 @@ pub async fn run(
     target: &RepoRef,
     only: &[Resource],
     prune: bool,
+    strict: bool,
     self_app: Option<&SelfApp>,
 ) -> Result<Plan> {
     let scope = Scope::new(only);
@@ -208,6 +209,9 @@ pub async fn run(
     let (mut undeclared, unused) = undeclared::find(config, owned_by_org);
     undeclared.retain(|path| undeclared::in_scope(path, &scope));
     errors.extend(unused);
+    if strict {
+        errors.extend(undeclared::strict(&undeclared));
+    }
     if !errors.is_empty() {
         return Err(Diagnostics::new(errors).into());
     }

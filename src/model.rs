@@ -108,7 +108,8 @@ pub struct Meta {
     pub repo: Option<String>,
     /// Key paths of settings to leave unchanged without declaring them, such as `actions` or
     /// `ruleset.main.rules.pull_request.required_reviewers`. A table covers every key in it.
-    /// plan reports the settings ghrs knows but neither the file nor this list mentions
+    /// plan reports the settings ghrs knows but neither the file nor this list mentions, and
+    /// --strict rejects them
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unmanaged: Vec<String>,
 }
