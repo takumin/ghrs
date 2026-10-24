@@ -41,26 +41,7 @@ fn list(root: &Json, schema: &Json, path: &str, out: &mut String) {
 /// ignored, since every item has the same keys.
 pub fn key(path: &str) -> Result<String> {
     let root = model::json_schema();
-    let mut schema = &root;
-    let mut at = String::new();
-    for segment in path.split('.') {
-        let segment = segment.split('[').next().unwrap_or_default();
-        let children = children(&root, schema);
-        let found = children
-            .iter()
-            .find(|(key, _)| *key == segment)
-            .or_else(|| children.iter().find(|(key, _)| *key == NAME));
-        let Some((key, child)) = found else {
-            let keys: Vec<&str> = children.iter().map(|(key, _)| *key).collect();
-            bail!(
-                "unknown key {segment:?} under {:?}; the keys there are: {}",
-                if at.is_empty() { "the top level" } else { &at },
-                keys.join(", ")
-            );
-        };
-        at = join(&at, key);
-        schema = child;
-    }
+    let (at, schema) = find(&root, path)?;
 
     let mut out = format!("{at}\n");
     out.push_str(&format!("  type: {}\n", type_name(&root, schema)));
@@ -95,6 +76,31 @@ pub fn key(path: &str) -> Result<String> {
         out.push_str(&format!("\n  {paragraph}\n"));
     }
     Ok(out)
+}
+
+/// The key `path` names, as the schema writes it, and its schema.
+fn find<'a>(root: &'a Json, path: &str) -> Result<(String, &'a Json)> {
+    let mut schema = root;
+    let mut at = String::new();
+    for segment in path.split('.') {
+        let segment = segment.split('[').next().unwrap_or_default();
+        let children = children(root, schema);
+        let found = children
+            .iter()
+            .find(|(key, _)| *key == segment)
+            .or_else(|| children.iter().find(|(key, _)| *key == NAME));
+        let Some((key, child)) = found else {
+            let keys: Vec<&str> = children.iter().map(|(key, _)| *key).collect();
+            bail!(
+                "unknown key {segment:?} under {:?}; the keys there are: {}",
+                if at.is_empty() { "the top level" } else { &at },
+                keys.join(", ")
+            );
+        };
+        at = join(&at, key);
+        schema = child;
+    }
+    Ok((at, schema))
 }
 
 /// Each key written in a declaration file, with its value and description. Keys the schema does
