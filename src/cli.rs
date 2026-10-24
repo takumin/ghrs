@@ -185,6 +185,7 @@ pub struct CompletionArgs {
 #[derive(Clone, Copy, ValueEnum)]
 pub enum Resource {
     Repository,
+    Actions,
     Ruleset,
     Collaborator,
     Team,

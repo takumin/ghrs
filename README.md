@@ -3,7 +3,7 @@
 Converge GitHub repository settings to a declaration file.
 
 ghrs reads a `.ghrs.toml` that declares the desired settings of one repository, compares it with the current state on GitHub, and applies the difference.
-It covers repository settings, rulesets, collaborators, and teams.
+It covers repository settings, GitHub Actions permissions, rulesets, collaborators, and teams.
 
 ## Installation
 
@@ -66,7 +66,7 @@ Common options for `plan` and `apply`:
 | --- | --- |
 | `--repo OWNER/NAME` | Target repository |
 | `--config PATH` | Declaration file (default: `.ghrs.toml`) |
-| `--only RESOURCE,...` | Limit to `repository`, `ruleset`, `collaborator`, `team` |
+| `--only RESOURCE,...` | Limit to `repository`, `actions`, `ruleset`, `collaborator`, `team` |
 | `--prune` | Delete rulesets, collaborators, and teams that are not declared |
 | `--verbose` | Also show unchanged fields |
 | `--json` | Output JSON |
@@ -128,6 +128,18 @@ delete_branch_on_merge = true
 default_branch = "main"
 topics = ["github", "cli"]
 
+# GitHub Actions permissions. Only the fields written here are compared, too.
+[actions]
+allowed_actions = "selected"          # "all", "local_only", or "selected"
+sha_pinning_required = true           # actions must be pinned to a full commit SHA
+default_workflow_permissions = "read" # GITHUB_TOKEN permissions: "read" or "write"
+can_approve_pull_request_reviews = false
+
+[actions.selected_actions]            # requires allowed_actions = "selected"
+github_owned_allowed = true
+verified_allowed = false
+patterns_allowed = ["aquaproj/*", "reviewdog/*"]
+
 # Each ruleset is a table keyed by its name.
 [ruleset.main]
 target = "branch"        # "branch" or "tag"
@@ -180,6 +192,11 @@ A new rule missing a required parameter (for example, `merge_queue = true`) is r
 With `--json`, these errors are written to standard output as structured diagnostics with a code, a path, and a suggested fix.
 
 Rulesets inherited from the organization are not managed.
+
+`[actions]` reads and writes the settings on the repository's Actions settings page.
+Like `[repository]`, it compares only the fields written, and `plan` makes no API calls for it when it is empty.
+Changes that widen what workflows can do, such as moving `allowed_actions` from `selected` to `all`, granting `write` to `GITHUB_TOKEN`, or adding to `patterns_allowed`, count as weakening protection.
+When the owning organization's policy fixes a setting, GitHub rejects the change with a 409.
 
 ghrs assumes the GitHub Free plan.
 It rejects what needs a paid plan: rulesets on a private repository, `enforcement = "evaluate"`, `target = "push"`, and `visibility = "internal"`.

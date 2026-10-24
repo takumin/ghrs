@@ -8,11 +8,11 @@
 use serde::Serialize;
 use serde_json::{Map, Value as Json, json};
 
-use crate::model::Repository;
+use crate::model::{Actions, Repository};
 use crate::resolve::Directory;
 use crate::schema::{
-    ACTORS_WITHOUT_ID, actor_type_to_toml, for_each_review_actor, review_actor_type_to_toml,
-    rule_to_api, rule_to_toml,
+    ACTORS_WITHOUT_ID, ALLOWED_ACTIONS, WORKFLOW_PERMISSIONS, actor_type_to_toml,
+    for_each_review_actor, review_actor_type_to_toml, rule_to_api, rule_to_toml,
 };
 use crate::state::{Actor, RulesetState};
 
@@ -83,6 +83,53 @@ pub fn repository(decl: &Repository, current: &Json) -> ResourceChange {
 
     ResourceChange {
         kind: "repository",
+        name: None,
+        action: if fields.changed() {
+            Action::Update
+        } else {
+            Action::NoChange
+        },
+        fields: fields.0,
+        destructive,
+    }
+}
+
+/// Compare only the declared fields. `current` has the declaration's shape, with
+/// `selected_actions` only when GitHub returned it.
+pub fn actions(decl: &Actions, current: &Json) -> ResourceChange {
+    let mut fields = Fields::default();
+    let declared = serde_json::to_value(decl).unwrap_or_default();
+
+    for (key, want) in declared.as_object().into_iter().flatten() {
+        if key == "selected_actions" {
+            for (k, want) in want.as_object().into_iter().flatten() {
+                let path = format!("{key}.{k}");
+                match (current[key].get(k), want) {
+                    (have, Json::Array(want)) => {
+                        let have = have.and_then(Json::as_array).map_or(&[][..], Vec::as_slice);
+                        fields.set(&path, have, want);
+                    }
+                    (have, want) => fields.value(path, have, Some(want)),
+                }
+            }
+        } else {
+            fields.value(key.clone(), current.get(key), Some(want));
+        }
+    }
+
+    // Allowances in selected_actions only take effect, and so only widen, once the repository
+    // already allows selected actions
+    let selected = current["allowed_actions"] == "selected";
+    let destructive = fields
+        .0
+        .iter()
+        .filter(|f| selected || !f.path.starts_with("selected_actions."))
+        .filter_map(|f| param_weakening(f, ACTIONS_WEAKENING))
+        .map(|message| format!("actions: {message}"))
+        .collect();
+
+    ResourceChange {
+        kind: "actions",
         name: None,
         action: if fields.changed() {
             Action::Update
@@ -448,6 +495,20 @@ const WEAKENING_PARAMS: &[(&str, Weakens)] = &[
     ("rules.code_coverage.max_coverage_drop", Weakens::Increase),
 ];
 
+/// Like [`WEAKENING_PARAMS`], for the fields of `actions`.
+const ACTIONS_WEAKENING: &[(&str, Weakens)] = &[
+    ("allowed_actions", Weakens::Widen(ALLOWED_ACTIONS)),
+    ("sha_pinning_required", Weakens::Disable),
+    (
+        "default_workflow_permissions",
+        Weakens::Widen(WORKFLOW_PERMISSIONS),
+    ),
+    ("can_approve_pull_request_reviews", Weakens::Enable),
+    ("selected_actions.github_owned_allowed", Weakens::Enable),
+    ("selected_actions.verified_allowed", Weakens::Enable),
+    ("selected_actions.patterns_allowed", Weakens::Add),
+];
+
 #[derive(Clone, Copy)]
 enum Weakens {
     /// `true` -> `false`
@@ -456,6 +517,10 @@ enum Weakens {
     Enable,
     Decrease,
     Increase,
+    /// Moving to a later value of the list, which runs from the narrowest to the widest
+    Widen(&'static [&'static str]),
+    /// Adding an element to the array
+    Add,
     /// Removing an element of the array
     Remove,
 }
@@ -488,11 +553,21 @@ fn weakening(field: &FieldChange) -> Option<String> {
         }
         _ => {}
     }
+    param_weakening(field, WEAKENING_PARAMS)
+}
 
-    let (_, weakens) = WEAKENING_PARAMS.iter().find(|(p, _)| *p == path)?;
+/// Why a field change weakens protection, if `table` lists its path.
+fn param_weakening(field: &FieldChange, table: &[(&str, Weakens)]) -> Option<String> {
+    let path = field.path.as_str();
+    let (_, weakens) = table.iter().find(|(p, _)| *p == path)?;
     let (before, after) = (field.before.as_ref(), field.after.as_ref());
     let weakened = match (weakens, field.op) {
         (Weakens::Remove, Op::Remove) => return Some(format!("removes an entry from {path}")),
+        (Weakens::Add, Op::Add) => return Some(format!("adds {} to {path}", after?)),
+        (Weakens::Widen(order), Op::Change) => {
+            let rank = |v: Option<&Json>| order.iter().position(|o| v == Some(&json!(o)));
+            matches!((rank(before), rank(after)), (Some(b), Some(a)) if a > b)
+        }
         (Weakens::Disable, Op::Change | Op::Remove) => before == Some(&json!(true)),
         (Weakens::Enable, Op::Change | Op::Add) => {
             after == Some(&json!(true)) && before != Some(&json!(true))
@@ -1034,6 +1109,90 @@ mod tests {
         let decl: Repository = toml::from_str("description = \"\"\nhomepage = \"\"").unwrap();
         let change = repository(&decl, &json!({ "description": null, "homepage": null }));
         assert_eq!(change.action, Action::NoChange);
+    }
+
+    fn actions_current(allowed: &str) -> Json {
+        json!({
+            "enabled": true,
+            "allowed_actions": allowed,
+            "sha_pinning_required": true,
+            "default_workflow_permissions": "read",
+            "can_approve_pull_request_reviews": false,
+            "selected_actions": {
+                "github_owned_allowed": true,
+                "verified_allowed": false,
+                "patterns_allowed": ["a/*"],
+            },
+        })
+    }
+
+    #[test]
+    fn actions_compare_declared_fields_only() {
+        let decl: Actions = toml::from_str(
+            "allowed_actions = \"selected\"\n\
+            [selected_actions]\npatterns_allowed = [\"b/*\", \"a/*\"]",
+        )
+        .unwrap();
+        let change = actions(&decl, &actions_current("selected"));
+        assert_eq!(change.action, Action::Update);
+        assert_eq!(
+            changed(&change),
+            [(Op::Add, "selected_actions.patterns_allowed"),]
+        );
+
+        // GitHub has no selected_actions to compare with
+        let mut current = actions_current("all");
+        current.as_object_mut().unwrap().remove("selected_actions");
+        let change = actions(&decl, &current);
+        assert_eq!(
+            changed(&change),
+            [
+                (Op::Change, "allowed_actions"),
+                (Op::Add, "selected_actions.patterns_allowed"),
+                (Op::Add, "selected_actions.patterns_allowed"),
+            ]
+        );
+        assert!(change.destructive.is_empty());
+    }
+
+    #[test]
+    fn flags_weakening_actions() {
+        let decl: Actions = toml::from_str(
+            "allowed_actions = \"all\"\nsha_pinning_required = false\n\
+            default_workflow_permissions = \"write\"\ncan_approve_pull_request_reviews = true\n\
+            [selected_actions]\nverified_allowed = true\npatterns_allowed = [\"a/*\", \"b/*\"]",
+        )
+        .unwrap();
+        let change = actions(&decl, &actions_current("selected"));
+        assert_eq!(
+            change.destructive,
+            [
+                "actions: changes allowed_actions from \"selected\" to \"all\"",
+                "actions: changes can_approve_pull_request_reviews from false to true",
+                "actions: changes default_workflow_permissions from \"read\" to \"write\"",
+                "actions: adds \"b/*\" to selected_actions.patterns_allowed",
+                "actions: changes selected_actions.verified_allowed from false to true",
+                "actions: changes sha_pinning_required from true to false",
+            ]
+        );
+
+        // Narrowing is not flagged
+        let decl: Actions = toml::from_str(
+            "allowed_actions = \"local_only\"\nsha_pinning_required = true\n\
+            default_workflow_permissions = \"read\"",
+        )
+        .unwrap();
+        let change = actions(&decl, &actions_current("all"));
+        assert_eq!(change.action, Action::Update);
+        assert!(change.destructive.is_empty());
+
+        // Allowances take effect only once selected actions are allowed
+        let decl: Actions = toml::from_str(
+            "allowed_actions = \"selected\"\n[selected_actions]\nverified_allowed = true",
+        )
+        .unwrap();
+        let change = actions(&decl, &actions_current("all"));
+        assert!(change.destructive.is_empty());
     }
 
     #[test]

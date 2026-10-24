@@ -59,6 +59,9 @@ pub struct Config {
     /// Repository settings. Only the fields written are compared
     #[serde(default)]
     pub repository: Repository,
+    /// GitHub Actions settings. Only the fields written are compared
+    #[serde(default, skip_serializing_if = "Actions::is_empty")]
+    pub actions: Actions,
     /// Rulesets keyed by name (`[ruleset.main]`). Rulesets not declared are kept unless plan /
     /// apply run with --prune
     #[serde(
@@ -159,6 +162,64 @@ pub struct Repository {
     /// Set with `PUT /repos/{owner}/{repo}/topics`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topics: Option<Vec<String>>,
+}
+
+optional_table! {
+    /// GitHub Actions settings of the repository, with the names of
+    /// `PUT /repos/{owner}/{repo}/actions/permissions` and `.../actions/permissions/workflow`.
+    /// Only the fields that are written are compared. Unwritten fields are left untouched. The
+    /// owning Organization's policy can prevent a change, and GitHub then returns a 409.
+    pub struct Actions {
+        /// Enables GitHub Actions
+        #[schemars(extend("x-github-source" = rest_api_schema("actions-enabled")))]
+        enabled: bool,
+        /// Actions and reusable workflows allowed to run. `local_only`: only those in
+        /// repositories of the same owner. `selected`: those and the ones `selected_actions`
+        /// allows. `all`: any
+        #[schemars(extend(
+            "enum" = schema::ALLOWED_ACTIONS,
+            "x-github-source" = rest_api_schema("allowed-actions")
+        ))]
+        allowed_actions: String,
+        /// Actions must be pinned to a full-length commit SHA
+        #[schemars(extend("x-github-source" = rest_api_schema("sha-pinning-required")))]
+        sha_pinning_required: bool,
+        /// Permissions granted to `GITHUB_TOKEN` when a workflow does not declare `permissions`
+        #[schemars(extend(
+            "enum" = schema::WORKFLOW_PERMISSIONS,
+            "x-github-source" = rest_api_schema("actions-default-workflow-permissions")
+        ))]
+        default_workflow_permissions: String,
+        /// GitHub Actions can approve pull requests
+        #[schemars(extend(
+            "x-github-source" = rest_api_schema("actions-can-approve-pull-request-reviews")
+        ))]
+        can_approve_pull_request_reviews: bool,
+        /// What `allowed_actions = "selected"` allows besides the owner's actions, which it
+        /// requires. Set with `PUT /repos/{owner}/{repo}/actions/permissions/selected-actions`
+        selected_actions: SelectedActions,
+    }
+}
+
+impl Actions {
+    pub fn is_empty(&self) -> bool {
+        serde_json::to_value(self).is_ok_and(|v| v.as_object().is_some_and(|m| m.is_empty()))
+    }
+}
+
+optional_table! {
+    /// Actions and reusable workflows allowed with `allowed_actions = "selected"`. Keys not
+    /// written keep their current values.
+    #[schemars(extend("x-github-source" = rest_api_schema("selected-actions")))]
+    pub struct SelectedActions {
+        /// Allows actions owned by GitHub, such as those in the `actions` Organization
+        github_owned_allowed: bool,
+        /// Allows actions by GitHub Marketplace verified creators
+        verified_allowed: bool,
+        /// Patterns of actions and reusable workflows to allow, such as `monalisa/octocat@*`,
+        /// `monalisa/octocat@v2` or `monalisa/*`. GitHub applies them to public repositories only
+        patterns_allowed: Vec<String>,
+    }
 }
 
 /// A ruleset of the repository. Rulesets inherited from the Organization are not managed.
@@ -986,6 +1047,14 @@ mod tests {
             (
                 "[ruleset.r]\ntarget = \"branch\"",
                 ".ruleset.r: missing \"enforcement\"",
+            ),
+            (
+                "[actions]\nallowed_actions = \"any\"",
+                ".actions.allowed_actions: \"any\" is not in the enum",
+            ),
+            (
+                "[actions.selected_actions]\npatterns = []",
+                ".actions.selected_actions.patterns: unknown key",
             ),
         ] {
             assert_eq!(schema_mismatches(text), [mismatch], "{text}");

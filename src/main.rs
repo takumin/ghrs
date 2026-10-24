@@ -1,6 +1,7 @@
 //! ghrs -- CLI that converges GitHub repository settings to the declaration file.
 
 mod access;
+mod actions;
 mod apply;
 mod auth;
 mod cli;

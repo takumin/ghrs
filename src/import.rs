@@ -5,6 +5,7 @@ use serde_json::{Map, Value as Json};
 use std::collections::HashMap;
 
 use crate::access;
+use crate::actions;
 use crate::auth::SelfApp;
 use crate::diagnostic::Diagnostics;
 use crate::github::GitHub;
@@ -112,10 +113,20 @@ impl Importer {
             }
         }
 
+        let (actions, unknown) =
+            actions::declaration(&actions::current(&mut self.gh, &target, true).await?)?;
+        for key in unknown {
+            self.warn(format!(
+                "actions.{key} is not supported; left it out of the declaration, and plan keeps \
+                it as is"
+            ));
+        }
+
         Ok(Config {
             // Left out so that a copied file follows the git remote of its new repository
             meta: Meta::default(),
             repository,
+            actions,
             rulesets,
             collaborators,
             teams,

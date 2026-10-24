@@ -307,6 +307,12 @@ pub const TARGETS: &[&str] = &["branch", "tag"];
 
 pub const VISIBILITIES: &[&str] = &["public", "private"];
 
+/// Values of `actions.allowed_actions`, from the narrowest to the widest.
+pub const ALLOWED_ACTIONS: &[&str] = &["local_only", "selected", "all"];
+
+/// Values of `actions.default_workflow_permissions`, from the narrowest to the widest.
+pub const WORKFLOW_PERMISSIONS: &[&str] = &["read", "write"];
+
 /// Maximum number of rulesets per repository. Creating the 76th yields 422 (`The ruleset limit
 /// has been reached.`) (observed, personal repository on the free plan).
 pub const MAX_RULESETS: usize = 75;
@@ -598,6 +604,53 @@ mod tests {
                 let documented: BTreeSet<&str> = documented.keys().map(String::as_str).collect();
                 assert_eq!(declared, documented, "keys of {name}");
             }
+        }
+    }
+
+    /// Checks `[actions]` against [`REST_API_DESCRIPTION`]: each key exists under the schema it
+    /// names, with the same enumerated values, and together the keys are exactly what the PUT
+    /// endpoints take.
+    #[test]
+    #[ignore = "downloads the REST API description; run task test:rest-api"]
+    fn actions_match_the_rest_api_description() {
+        let api = rest_api_description();
+        let schemas = &api["components"]["schemas"];
+        let prefix = format!("{REST_API_DESCRIPTION}#/components/schemas/");
+        let ours = crate::model::json_schema();
+        let actions = ours["$defs"]["Actions"]["properties"].as_object().unwrap();
+
+        let mut sent = BTreeSet::new();
+        for endpoint in ["", "/workflow"] {
+            let path = format!("/repos/{{owner}}/{{repo}}/actions/permissions{endpoint}");
+            let mut body =
+                &api["paths"][&path]["put"]["requestBody"]["content"]["application/json"]["schema"];
+            if let Some(r) = body["$ref"].as_str() {
+                body = &schemas[r.trim_start_matches("#/components/schemas/")];
+            }
+            sent.extend(body["properties"].as_object().unwrap().keys().cloned());
+        }
+        let ours: BTreeSet<String> = actions
+            .keys()
+            .filter(|key| *key != "selected_actions")
+            .cloned()
+            .collect();
+        assert_eq!(ours, sent, "keys of actions");
+
+        for (key, property) in actions {
+            let Some(source) = property["x-github-source"].as_str() else {
+                continue;
+            };
+            let documented = &schemas[source.strip_prefix(&prefix).unwrap()];
+            assert!(documented.is_object(), "{key}: {source} is not documented");
+            let values = |v: &Json| -> BTreeSet<String> {
+                v["enum"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            };
+            assert_eq!(values(property), values(documented), "values of {key}");
         }
     }
 

@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde_json::{Map, Value as Json, json};
 
 use crate::access;
+use crate::actions;
 use crate::auth::SelfApp;
 use crate::cli::Resource;
 use crate::diagnostic::{Code, Diagnostic, Diagnostics};
@@ -43,6 +44,13 @@ pub enum Step {
         fields: Map<String, Json>,
         /// topics are fully replaced via a separate endpoint
         topics: Option<Json>,
+    },
+    /// Bodies for each Actions endpoint with changes, sent in this order: `selected_actions`
+    /// needs `allowed_actions = "selected"` to be set first
+    Actions {
+        permissions: Option<Json>,
+        selected_actions: Option<Json>,
+        workflow: Option<Json>,
     },
     GrantCollaborator {
         login: String,
@@ -86,6 +94,7 @@ impl Step {
     pub fn label(&self) -> String {
         match self {
             Step::Repository { .. } => "repository".to_string(),
+            Step::Actions { .. } => "actions".to_string(),
             Step::GrantCollaborator { login, permission } => {
                 format!("grant {permission} to collaborator \"{login}\"")
             }
@@ -130,6 +139,14 @@ impl Step {
             Step::Repository { fields, topics } => {
                 usize::from(!fields.is_empty()) + usize::from(topics.is_some())
             }
+            Step::Actions {
+                permissions,
+                selected_actions,
+                workflow,
+            } => [permissions, selected_actions, workflow]
+                .iter()
+                .filter(|body| body.is_some())
+                .count(),
             _ => 1,
         }
     }
@@ -146,6 +163,7 @@ pub struct Summary {
 /// declarations are not validated against the repository.
 pub struct Scope {
     pub repository: bool,
+    pub actions: bool,
     pub rulesets: bool,
     pub collaborators: bool,
     pub teams: bool,
@@ -156,6 +174,7 @@ impl Scope {
         let wants = |r: fn(&Resource) -> bool| only.is_empty() || only.iter().any(r);
         Self {
             repository: wants(|r| matches!(r, Resource::Repository)),
+            actions: wants(|r| matches!(r, Resource::Actions)),
             rulesets: wants(|r| matches!(r, Resource::Ruleset)),
             collaborators: wants(|r| matches!(r, Resource::Collaborator)),
             teams: wants(|r| matches!(r, Resource::Team)),
@@ -193,10 +212,18 @@ pub async fn run(
         }
         changes.push(change);
     }
+    // Nothing to compare when nothing is declared, so spare the API calls
+    if scope.actions && !config.actions.is_empty() {
+        let with_selected = config.actions.selected_actions.is_some();
+        let current = actions::current(gh, target, with_selected).await?;
+        let change = diff::actions(&config.actions, &current);
+        steps.extend(actions::step(&config.actions, &current, &change));
+        changes.push(change);
+    }
 
     let mut ignored = Vec::new();
 
-    // Apply order is repository -> collaborator / team -> ruleset
+    // Apply order is repository -> actions -> collaborator / team -> ruleset
     if scope.collaborators {
         let current = access::current_collaborators(gh, target).await?;
         let declared: Vec<(&str, &str)> = config
