@@ -890,7 +890,8 @@ mod tests {
         assert_eq!(
             changes[0].destructive,
             [
-                "ruleset \"r\": changes rules.update.update_allows_fetch_and_merge from unset to true"
+                "ruleset \"r\": changes rules.update.update_allows_fetch_and_merge from unset to \
+                    true"
             ]
         );
     }
