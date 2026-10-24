@@ -78,6 +78,11 @@ pub fn key(path: &str) -> Result<String> {
     Ok(out)
 }
 
+/// Whether `path` names a key of the declaration file, in the way [`key`] reads it.
+pub fn check_key(path: &str) -> Result<()> {
+    find(&model::json_schema(), path).map(|_| ())
+}
+
 /// The key `path` names, as the schema writes it, and its schema.
 fn find<'a>(root: &'a Json, path: &str) -> Result<(String, &'a Json)> {
     let mut schema = root;

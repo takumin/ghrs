@@ -19,6 +19,7 @@ use crate::repo::RepoRef;
 use crate::resolve::{self, Directory};
 use crate::schema::{MAX_RULESETS, actor_type_to_toml};
 use crate::state::{self, RulesetState};
+use crate::undeclared;
 use crate::validate;
 
 #[derive(Serialize)]
@@ -28,6 +29,10 @@ pub struct Plan {
     /// Resources not declared but kept because `--prune` is absent (in the form `ruleset "x"`)
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ignored: Vec<String>,
+    /// Settings ghrs knows but the file leaves unwritten and meta.unmanaged does not list, kept
+    /// at their current values (key paths such as `repository.homepage`)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub undeclared: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
     pub summary: Summary,
@@ -198,7 +203,11 @@ pub async fn run(
     let repo = gh.get(&format!("/repos/{target}")).await?;
     let owned_by_org = repo["owner"]["type"] == "Organization";
     let visibility = repo["visibility"].as_str().unwrap_or_default();
-    let errors = validate::check_context(config, &target.owner, owned_by_org, visibility, &scope);
+    let mut errors =
+        validate::check_context(config, &target.owner, owned_by_org, visibility, &scope);
+    let (mut undeclared, unused) = undeclared::find(config, owned_by_org);
+    undeclared.retain(|path| undeclared::in_scope(path, &scope));
+    errors.extend(unused);
     if !errors.is_empty() {
         return Err(Diagnostics::new(errors).into());
     }
@@ -336,6 +345,7 @@ pub async fn run(
         repository: target.to_string(),
         changes,
         ignored,
+        undeclared,
         warnings,
         summary,
         writes: steps.iter().map(Step::writes).sum(),

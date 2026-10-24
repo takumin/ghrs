@@ -17,6 +17,7 @@ mod repo;
 mod resolve;
 mod schema;
 mod state;
+mod undeclared;
 mod validate;
 
 use anyhow::{Context, Result, bail};

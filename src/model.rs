@@ -22,7 +22,8 @@ use std::collections::BTreeMap;
 use crate::schema::{self, rest_api_schema};
 
 /// Declares a table whose fields are all optional, and lists its keys in `KEYS`. import uses
-/// `KEYS` to tell what ghrs knows from what GitHub added later.
+/// `KEYS` to tell what ghrs knows from what GitHub added later, and plan to find the keys left
+/// unwritten.
 macro_rules! optional_table {
     (
         $(#[$meta:meta])*
@@ -42,8 +43,6 @@ macro_rules! optional_table {
         }
 
         impl $name {
-            // Unused for tables that are not a rule's parameters
-            #[allow(dead_code)]
             pub const KEYS: &[&str] = &[$(stringify!($field)),*];
         }
     };
@@ -53,7 +52,8 @@ macro_rules! optional_table {
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    /// The target repository, used when --repo is not given
+    /// The target repository, used when --repo is not given, and the settings left unchanged on
+    /// purpose
     #[serde(default, skip_serializing_if = "Meta::is_empty")]
     pub meta: Meta,
     /// Repository settings. Only the fields written are compared
@@ -94,8 +94,9 @@ pub struct Config {
     pub teams: Vec<Team>,
 }
 
-/// The target repository. --repo takes precedence over it, and without either, the target is
-/// taken from the git remote.
+/// The target repository, and the settings ghrs leaves unchanged on purpose. --repo takes
+/// precedence over `owner` and `repo`, and without either, the target is taken from the git
+/// remote.
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Meta {
@@ -105,11 +106,16 @@ pub struct Meta {
     /// Repository name, without the owner
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// Key paths of settings to leave unchanged without declaring them, such as `actions` or
+    /// `ruleset.main.rules.pull_request.required_reviewers`. A table covers every key in it.
+    /// plan reports the settings ghrs knows but neither the file nor this list mentions
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unmanaged: Vec<String>,
 }
 
 impl Meta {
     fn is_empty(&self) -> bool {
-        self.owner.is_none() && self.repo.is_none()
+        self.owner.is_none() && self.repo.is_none() && self.unmanaged.is_empty()
     }
 }
 

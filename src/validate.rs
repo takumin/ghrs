@@ -5,6 +5,7 @@ use serde_json::{Value as Json, json};
 use std::collections::HashSet;
 
 use crate::diagnostic::{Applicability, Code, Diagnostic, Diagnostics, Edit};
+use crate::explain;
 use crate::model::{BypassActor, Config, ReviewActor, Rule, Ruleset};
 use crate::plan::Scope;
 use crate::schema::{
@@ -224,6 +225,18 @@ pub fn check(config: &Config, app_auth: bool) -> Vec<Diagnostic> {
                 )
                 .at(format!("meta.{key}"))
                 .help("write the owner and the repository name separately, as in owner/repo"),
+            );
+        }
+    }
+    for (i, entry) in config.meta.unmanaged.iter().enumerate() {
+        if let Err(err) = explain::check_key(entry) {
+            errors.push(
+                Diagnostic::error(
+                    Code::UnknownUnmanaged,
+                    format!("meta.unmanaged entry \"{entry}\" is not a key path"),
+                )
+                .at(format!("meta.unmanaged[{i}]"))
+                .help(err.to_string()),
             );
         }
     }
@@ -1349,6 +1362,18 @@ name = "owner"
         let config: Config =
             toml::from_str("[meta]\nowner = \"takumin\"\nrepo = \"ghrs\"").unwrap();
         assert!(check(&config, false).is_empty());
+    }
+
+    #[test]
+    fn unmanaged_entries_must_be_key_paths() {
+        let errors = errors(
+            "[meta]\nunmanaged = [\"actions\", \"ruleset.main.rules.pull_request\", \
+            \"repository.has_wikis\"]",
+        );
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code, Code::UnknownUnmanaged);
+        assert_eq!(errors[0].path.as_deref(), Some("meta.unmanaged[2]"));
+        assert!(errors[0].help.as_deref().unwrap().contains("has_wiki"));
     }
 
     #[test]

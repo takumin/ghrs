@@ -302,7 +302,7 @@
     },
     "Meta": {
       "additionalProperties": false,
-      "description": "The target repository. --repo takes precedence over it, and without either, the target is\ntaken from the git remote.",
+      "description": "The target repository, and the settings ghrs leaves unchanged on purpose. --repo takes\nprecedence over `owner` and `repo`, and without either, the target is taken from the git\nremote.",
       "properties": {
         "owner": {
           "description": "User or Organization that owns the repository",
@@ -311,6 +311,13 @@
         "repo": {
           "description": "Repository name, without the owner",
           "type": "string"
+        },
+        "unmanaged": {
+          "description": "Key paths of settings to leave unchanged without declaring them, such as `actions` or\n`ruleset.main.rules.pull_request.required_reviewers`. A table covers every key in it.\nplan reports the settings ghrs knows but neither the file nor this list mentions",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -970,7 +977,7 @@
     },
     "meta": {
       "$ref": "#/$defs/Meta",
-      "description": "The target repository, used when --repo is not given"
+      "description": "The target repository, used when --repo is not given, and the settings left unchanged on\npurpose"
     },
     "repository": {
       "$ref": "#/$defs/Repository",
