@@ -187,7 +187,7 @@ permission = "maintain"
 ```
 
 Settings ghrs knows but the file leaves unwritten keep their current values: fields of `[repository]` and `[actions]`, rules a ruleset can have (enabled or disabled), and parameters of an enabled rule, including every parameter of a rule written as `true`.
-`plan`, `apply`, and `drift` list them in a note (`undeclared` with `--json`), naming a table as a whole when none of its keys is written.
+`plan`, `apply`, and `drift` list them in a warning (`undeclared` with `--json`), naming a table as a whole when none of its keys is written.
 List the ones to leave unchanged on purpose in `meta.unmanaged`, as key paths; a table covers every key in it.
 An entry that is not a key path, or covers no unwritten setting, is an error.
 `--strict` turns each remaining unwritten setting into an error, which catches a setting a newer ghrs adds before it goes unmanaged without notice.
