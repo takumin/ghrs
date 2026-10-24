@@ -738,7 +738,9 @@ fn check_actor(
         .help("authenticate as a GitHub App (--app-id / GHRS_APP_ID), or write the App slug"),
         // Only private App integrations may be written as numeric IDs
         ("integration", Some(_)) => return,
-        (_, Some(value)) if is_numeric(value) => Diagnostic::error(
+        // A team slug can be all digits (a team named "2024"), so only roles are checked here;
+        // resolution reports a team that is not found
+        ("repository_role", Some(value)) if is_numeric(value) => Diagnostic::error(
             Code::NumericActorName,
             format!("{at}: {kind} name cannot be a numeric ID \"{value}\""),
         )
@@ -801,7 +803,9 @@ fn check_review_actor(
             )
             .at(format!("{full}.name")),
         );
-    } else if is_numeric(name) {
+    } else if kind == "integration" && is_numeric(name) {
+        // A team slug or a user login can be all digits, so only App slugs are checked here;
+        // resolution reports a team or user that is not found
         errors.push(
             Diagnostic::error(
                 Code::NumericActorName,
@@ -1094,6 +1098,11 @@ type = "integration"
 name = "12345"
 
 [[ruleset.r.bypass_actors]]
+type = "repository_role"
+name = "5"
+
+# A team slug can be all digits
+[[ruleset.r.bypass_actors]]
 type = "team"
 name = "678"
 
@@ -1353,7 +1362,8 @@ permission = "maintain"
                     dismissal_restriction = { allowed_actors = [{ type = \"team\", name = \"1\" }, \
                         { type = \"repository_role\", name = \"write\" }] }",
         );
-        assert_eq!(errors(&bad).len(), 3);
+        // A team slug can be all digits, so team "1" is not an error
+        assert_eq!(errors(&bad).len(), 2);
 
         let config: Config = toml::from_str(&ok).unwrap();
         assert_eq!(

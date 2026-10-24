@@ -310,7 +310,8 @@ async fn team(gh: &mut GitHub, dir: &mut Directory, org: &str, slug: &str, at: &
         bail!(
             "{at}: team \"{slug}\" not found in Organization \"{org}\"\n  \
             -> the team does not exist, or the token owner is not a member of the Organization\n  \
-            -> resolving team names needs a token of an Organization member with read:org"
+            -> resolving team names needs a token of an Organization member with read:org{}",
+            id_hint(slug, "team slug")
         );
     };
     let Some(id) = v["id"].as_u64() else {
@@ -375,12 +376,24 @@ async fn installation(
     Ok(())
 }
 
+/// A name that is all digits may be an ID written where a name belongs.
+fn id_hint(name: &str, expected: &str) -> String {
+    if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
+        format!("\n  -> if \"{name}\" is an ID, write the {expected} instead")
+    } else {
+        String::new()
+    }
+}
+
 async fn user(gh: &mut GitHub, dir: &mut Directory, login: &str, at: &str) -> Result<()> {
     if dir.user_id(login).is_some() {
         return Ok(());
     }
     let Some(v) = gh.get_optional(&format!("/users/{login}")).await? else {
-        bail!("{at}: user \"{login}\" not found");
+        bail!(
+            "{at}: user \"{login}\" not found{}",
+            id_hint(login, "user login")
+        );
     };
     let Some(id) = v["id"].as_u64() else {
         bail!("response of GET /users/{login} has no id");

@@ -369,7 +369,7 @@ impl Importer {
 
     /// Rewrite the `{id, type}` of `pull_request` reviewers and dismissal_restrictions into the
     /// declaration's `{type, name}`. IDs that cannot be mapped back to names are
-    /// left numeric with a warning. plan rejects them as declaration errors.
+    /// left numeric with a warning, and plan rejects them until they are replaced with names.
     async fn named_review_actors(&mut self, ruleset: &str, params: &Json) -> Json {
         let mut params = params.clone();
         let mut ids = Vec::new();
