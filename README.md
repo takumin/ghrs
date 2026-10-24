@@ -56,7 +56,7 @@ The target repository is taken from `--repo OWNER/NAME`, then from `[meta]` in t
 | `ghrs apply` | Apply the difference to GitHub |
 | `ghrs import` | Export the current settings in `.ghrs.toml` format |
 | `ghrs drift` | Report only whether there is any difference |
-| `ghrs schema` | Write the JSON Schema of the declaration file |
+| `ghrs schema` | Write the JSON Schema of the declaration file: each key's meaning, type, and allowed values |
 | `ghrs completion <SHELL>` | Write a shell completion script to standard output |
 
 Common options for `plan` and `apply`:
