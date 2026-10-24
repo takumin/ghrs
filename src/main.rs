@@ -135,7 +135,8 @@ const SCHEMA_URL: &str = concat!(
 /// line, and the second line keeps readers (coding agents above all) from guessing key meanings
 /// from GitHub's API.
 fn schema_header(schema: Option<&str>) -> String {
-    const NOTE: &str = "# Take key meanings from the schema, not from key names or the GitHub API.";
+    const NOTE: &str =
+        "# Take key meanings from `ghrs explain`, not from key names or the GitHub API.";
     format!("#:schema {}\n{NOTE}\n", schema.unwrap_or(SCHEMA_URL))
 }
 

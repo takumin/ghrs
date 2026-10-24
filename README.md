@@ -86,7 +86,7 @@ It is also committed as [`schema/ghrs.schema.json`](schema/ghrs.schema.json), wh
 
 ```toml
 #:schema https://raw.githubusercontent.com/takumin/ghrs/v<VERSION>/schema/ghrs.schema.json
-# Take key meanings from the schema, not from key names or the GitHub API.
+# Take key meanings from `ghrs explain`, not from key names or the GitHub API.
 ```
 
 `--schema PATH` changes the reference, and `--no-schema` drops these lines.
