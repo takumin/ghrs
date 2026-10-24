@@ -57,6 +57,7 @@ The target repository is taken from `--repo OWNER/NAME`, then from `[meta]` in t
 | `ghrs import` | Export the current settings in `.ghrs.toml` format |
 | `ghrs drift` | Report only whether there is any difference |
 | `ghrs schema` | Write the JSON Schema: key meanings, types, and allowed values |
+| `ghrs explain [KEY]` | Show what keys mean, and their names in the GitHub API |
 | `ghrs completion <SHELL>` | Write a shell completion script to standard output |
 
 Common options for `plan` and `apply`:
@@ -85,7 +86,7 @@ It is also committed as [`schema/ghrs.schema.json`](schema/ghrs.schema.json), wh
 
 ```toml
 #:schema https://raw.githubusercontent.com/takumin/ghrs/v<VERSION>/schema/ghrs.schema.json
-# Take key meanings from the schema, not from key names or the GitHub API.
+# Take key meanings from `ghrs explain`, not from key names or the GitHub API.
 ```
 
 `--schema PATH` changes the reference, and `--no-schema` drops these lines.
@@ -93,6 +94,14 @@ It is also committed as [`schema/ghrs.schema.json`](schema/ghrs.schema.json), wh
 ```sh
 ghrs schema --out ghrs.schema.json
 ghrs import --schema ./ghrs.schema.json --out .ghrs.toml
+```
+
+`ghrs explain` reads the same schema without a JSON parser: it lists every key, explains one key, or explains each key of a file.
+
+```sh
+ghrs explain
+ghrs explain ruleset.main.rules.pull_request
+ghrs explain --config .ghrs.toml
 ```
 
 Rulesets follow GitHub's REST API, and the schema ties them to [its description](https://github.com/github/rest-api-description) at the commit ghrs was checked against.

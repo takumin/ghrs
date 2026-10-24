@@ -6,6 +6,7 @@ mod auth;
 mod cli;
 mod diagnostic;
 mod diff;
+mod explain;
 mod github;
 mod import;
 mod model;
@@ -75,6 +76,23 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             write_output(args.out.as_deref(), &text)?;
             Ok(ExitCode::SUCCESS)
         }
+        cli::Command::Explain(args) => {
+            let text = match (&args.key, &args.config) {
+                (_, Some(path)) => {
+                    let text = std::fs::read_to_string(path)
+                        .with_context(|| format!("cannot read {}", path.display()))?;
+                    explain::config(&text).with_context(|| path.display().to_string())?
+                }
+                (Some(key), None) => explain::key(key)?,
+                (None, None) => {
+                    out(&explain::index())?;
+                    note(explain::HINT);
+                    return Ok(ExitCode::SUCCESS);
+                }
+            };
+            out(&text)?;
+            Ok(ExitCode::SUCCESS)
+        }
         cli::Command::Completion(args) => {
             let mut command = Cli::command();
             let name = command.get_name().to_string();
@@ -117,7 +135,8 @@ const SCHEMA_URL: &str = concat!(
 /// line, and the second line keeps readers (coding agents above all) from guessing key meanings
 /// from GitHub's API.
 fn schema_header(schema: Option<&str>) -> String {
-    const NOTE: &str = "# Take key meanings from the schema, not from key names or the GitHub API.";
+    const NOTE: &str =
+        "# Take key meanings from `ghrs explain`, not from key names or the GitHub API.";
     format!("#:schema {}\n{NOTE}\n", schema.unwrap_or(SCHEMA_URL))
 }
 

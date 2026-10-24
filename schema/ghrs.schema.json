@@ -519,7 +519,7 @@
     },
     "Rules": {
       "additionalProperties": false,
-      "description": "Rules of a ruleset. Rules not written here are disabled.\n\nRules GitHub has but this table lacks cannot be declared. plan keeps them at their current\nvalues instead of disabling them, so a rule GitHub adds later is not deleted.\n\nFields are named by the API's rule type, so `KEYS` lists rule types. The renames follow\n`schema::RULE_NAMES`.",
+      "description": "Rules of a ruleset. Rules not written here are disabled.\n\nRules GitHub has but this table lacks cannot be declared. plan keeps them at their current\nvalues instead of disabling them, so a rule GitHub adds later is not deleted.",
       "properties": {
         "block_force_pushes": {
           "description": "Only bypass actors can force push to matching refs",
@@ -808,6 +808,7 @@
     },
     "Team": {
       "additionalProperties": false,
+      "description": "Access of one team to the repository.",
       "properties": {
         "permission": {
           "description": "Repository role granted to the team",

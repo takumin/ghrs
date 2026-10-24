@@ -235,9 +235,9 @@ optional_table! {
     ///
     /// Rules GitHub has but this table lacks cannot be declared. plan keeps them at their current
     /// values instead of disabling them, so a rule GitHub adds later is not deleted.
-    ///
-    /// Fields are named by the API's rule type, so `KEYS` lists rule types. The renames follow
-    /// `schema::RULE_NAMES`.
+    //
+    // Fields are named by the API's rule type, so `KEYS` lists rule types. The renames follow
+    // `schema::RULE_NAMES`.
     #[schemars(
         extend("x-github-source" = rest_api_schema("repository-rule")),
         transform = rule_sources
@@ -682,6 +682,7 @@ pub struct Collaborator {
     pub permission: String,
 }
 
+/// Access of one team to the repository.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Team {
