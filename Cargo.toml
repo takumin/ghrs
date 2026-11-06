@@ -32,4 +32,4 @@ serde_json = "1.0.154"
 serde_path_to_error = "0.1.20"
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros"] }
 toml = { version = "1.2.0", features = ["preserve_order"] }
-toml_edit = "0.25.18"
+toml_edit = "0.25.19"
