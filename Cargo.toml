@@ -12,7 +12,7 @@ repository = "https://github.com/takumin/ghrs"
 [dependencies]
 anyhow = "1.0.104"
 base64 = "0.23.1"
-clap = { version = "4.6.9", features = ["derive"] }
+clap = { version = "4.6.10", features = ["derive"] }
 clap_complete = "4.6.12"
 # The default `jwt-rust-crypto` backend pulls in the `rsa` crate (RUSTSEC-2023-0071, no fixed
 # version), so App JWTs are signed with aws-lc-rs instead. The rest are octocrab's defaults.
